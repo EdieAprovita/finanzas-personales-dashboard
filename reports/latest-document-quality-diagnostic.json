@@ -1,0 +1,130 @@
+{
+  "policy": "aggregate-only; no filenames, no raw OCR text, no merchants, no account identifiers",
+  "dbFile": "finanzas-os.sqlite",
+  "profiles": 1,
+  "documents": 61,
+  "transactions": 656,
+  "accounts": 9,
+  "byKind": {
+    "invoice_cfdi": 5,
+    "credit_card_statement": 16,
+    "bank_statement": 12,
+    "payroll_cfdi": 28
+  },
+  "byStatus": {
+    "needs_review": 19,
+    "processed": 42
+  },
+  "byFileType": {
+    "pdf": 19,
+    "xml": 28,
+    "csv": 14
+  },
+  "qualitySchema": {
+    "current": 0,
+    "legacy": 61,
+    "reimportRecommended": 61,
+    "rawFilesPersisted": false
+  },
+  "reviewRisk": {
+    "reviewOnlyDocuments": 19,
+    "warningDocuments": 47,
+    "appliedDocuments": 42,
+    "rejectedDocuments": 0
+  },
+  "fieldCoverageByKind": {
+    "invoice_cfdi": {
+      "label": "Facturas CFDI",
+      "documents": 5,
+      "detectedFields": 0,
+      "expectedFields": 30,
+      "completeness": 0,
+      "legacyDocuments": 5,
+      "missingFields": {
+        "issuerName": 5,
+        "iva": 5,
+        "receiverName": 5,
+        "subtotal": 5,
+        "total": 5,
+        "uuid": 5
+      }
+    },
+    "credit_card_statement": {
+      "label": "Tarjetas de credito",
+      "documents": 16,
+      "detectedFields": 0,
+      "expectedFields": 240,
+      "completeness": 0,
+      "legacyDocuments": 16,
+      "missingFields": {
+        "availableCredit": 16,
+        "cardReconciliationStatus": 16,
+        "creditLimit": 16,
+        "currentBalance": 16,
+        "cutoffDate": 16,
+        "dueDate": 16,
+        "financialCostsTotal": 16,
+        "minimumPayment": 16
+      }
+    },
+    "bank_statement": {
+      "label": "Bancos y ahorro",
+      "documents": 12,
+      "detectedFields": 0,
+      "expectedFields": 120,
+      "completeness": 0,
+      "legacyDocuments": 12,
+      "missingFields": {
+        "bankReconciliationStatus": 12,
+        "closingBalance": 12,
+        "depositsTotal": 12,
+        "netCashFlow": 12,
+        "openingBalance": 12,
+        "periodEnd": 12,
+        "periodStart": 12,
+        "speiTraceKey": 12
+      }
+    },
+    "payroll_cfdi": {
+      "label": "Nomina CFDI",
+      "documents": 28,
+      "detectedFields": 140,
+      "expectedFields": 392,
+      "completeness": 0.36,
+      "legacyDocuments": 28,
+      "missingFields": {
+        "deductionConcepts": 28,
+        "otherPaymentConcepts": 28,
+        "paidDays": 28,
+        "payrollComplementVersion": 28,
+        "payrollPeriodicity": 28,
+        "payrollType": 28,
+        "perceptionConcepts": 28,
+        "periodEnd": 28
+      }
+    }
+  },
+  "topMissingFields": {
+    "payroll_cfdi.deductionConcepts": 28,
+    "payroll_cfdi.otherPaymentConcepts": 28,
+    "payroll_cfdi.paidDays": 28,
+    "payroll_cfdi.payrollComplementVersion": 28,
+    "payroll_cfdi.payrollPeriodicity": 28,
+    "payroll_cfdi.payrollType": 28,
+    "payroll_cfdi.perceptionConcepts": 28,
+    "payroll_cfdi.periodEnd": 28,
+    "payroll_cfdi.periodStart": 28,
+    "credit_card_statement.availableCredit": 16,
+    "credit_card_statement.cardReconciliationStatus": 16,
+    "credit_card_statement.creditLimit": 16,
+    "credit_card_statement.currentBalance": 16,
+    "credit_card_statement.cutoffDate": 16,
+    "credit_card_statement.dueDate": 16,
+    "credit_card_statement.financialCostsTotal": 16
+  },
+  "recommendedActions": [
+    "Reimportar documentos legacy para recapturar texto con el extractor actual; la app no guarda archivos crudos.",
+    "Priorizar estados de tarjeta: corte, fecha limite, pagos, cargos y conciliacion impactan deuda y pago minimo.",
+    "Priorizar estados bancarios/nomina: saldos, depositos, retiros y conciliacion evitan inflar ingresos."
+  ]
+}
