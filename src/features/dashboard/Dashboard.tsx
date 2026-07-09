@@ -77,18 +77,25 @@ function ChartFrame({ className, children }: { className: string; children: (siz
 export function Dashboard({
   profile,
   metrics,
+  reportingPeriod,
+  onReportingPeriodChange,
   onStartCapture,
   onCreateFromDocuments,
   onOpenPlanning,
 }: {
   profile: FinancialProfile
   metrics: FinancialMetrics
+  reportingPeriod: string
+  onReportingPeriodChange: (period: string) => void
   onStartCapture: () => void
   onCreateFromDocuments: () => void
   onOpenPlanning: () => void
 }) {
   const facts = profileFacts(profile)
   const documentQuality = analyzeDocumentQuality(profile)
+  const periods = [...new Set(profile.monthlySnapshots.map((snapshot) => snapshot.month))].sort().reverse()
+  const upcomingDueDebts = profile.debts.filter((debt) => debt.dueDate >= metrics.asOfDate && debt.dueDate <= `${metrics.asOfDate.slice(0, 7)}-31`)
+  const constrainedGoals = metrics.goalReadiness.filter((goal) => goal.status === 'red' && !goal.isComplete)
 
   if (facts.isEmpty) {
     return (
@@ -292,7 +299,7 @@ export function Dashboard({
           <div className="empty-preview-kpis" aria-label="Indicadores pendientes">
             <article>
               <strong>--/100</strong>
-              <span>Salud financiera</span>
+              <span>Score Finanzas OS</span>
             </article>
             <article>
               <strong>$--</strong>
@@ -332,6 +339,41 @@ export function Dashboard({
 
   return (
     <div className="dashboard-grid">
+      <section className="panel wide dashboard-period-bar">
+        <div>
+          <p className="eyebrow">Periodo de reporte</p>
+          <strong>{reportingPeriod}</strong>
+          <span>{reportingPeriod === metrics.asOfDate.slice(0, 7) ? 'Mes en curso' : 'Último mes con datos'}</span>
+        </div>
+        <label>
+          Ver periodo
+          <select value={reportingPeriod} onChange={(event) => onReportingPeriodChange(event.target.value)}>
+            {periods.map((period) => (
+              <option key={period} value={period}>
+                {period}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+      {metrics.excludedForeignAccountCount > 0 && (
+        <section className="panel wide data-warning">
+          <AlertTriangle size={18} />
+          <span>
+            {metrics.excludedForeignAccountCount} cuenta(s) en moneda distinta a MXN no se incluyen en patrimonio ni KPIs hasta capturar un tipo de cambio fechado.
+          </span>
+        </section>
+      )}
+      {(documentQuality.risk.pendingReconciliation > 0 || upcomingDueDebts.length > 0 || constrainedGoals.length > 0) && (
+        <section className="panel wide data-warning" aria-label="Alertas accionables">
+          <AlertTriangle size={18} />
+          <span>
+            {documentQuality.risk.pendingReconciliation > 0 && `${documentQuality.risk.pendingReconciliation} documento(s) por conciliar. `}
+            {upcomingDueDebts.length > 0 && `Revisa fecha límite de ${upcomingDueDebts.map((debt) => debt.name).join(', ')}. `}
+            {constrainedGoals.length > 0 && `${constrainedGoals.length} meta(s) exceden la capacidad registrada.`}
+          </span>
+        </section>
+      )}
       <section className="kpi-grid">
         {metrics.kpis.map((kpi) => (
           <article className={`kpi ${kpi.status}`} key={kpi.label}>
@@ -342,6 +384,18 @@ export function Dashboard({
           </article>
         ))}
       </section>
+
+      <details className="panel wide score-details">
+        <summary>Cómo se forma el Score Finanzas OS</summary>
+        <p>Indicador propio del periodo {metrics.period}; no es una calificación crediticia ni una recomendación financiera.</p>
+        <ul>
+          {Object.entries(metrics.scoreBreakdown).map(([label, value]) => (
+            <li key={label}>
+              {label}: {Math.round(value)} punto(s)
+            </li>
+          ))}
+        </ul>
+      </details>
 
       {facts.hasImports && (
         <section className="panel wide import-impact">

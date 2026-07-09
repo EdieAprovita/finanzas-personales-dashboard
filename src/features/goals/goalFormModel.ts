@@ -45,27 +45,27 @@ export type GoalFormState = {
   targetCoverageMonths: string
 }
 
-export function defaultGoalForm(type: GoalType = 'savings'): GoalFormState {
+export function defaultGoalForm(type: GoalType = 'savings', asOfDate: string): GoalFormState {
   return {
     name: '',
     type,
     targetAmount: '',
     currentSaved: '',
-    targetDate: `${new Date().getFullYear() + 1}-12-01`,
+    targetDate: `${Number(asOfDate.slice(0, 4)) + 1}-12-01`,
     plannedMonthlyContribution: '',
     priority: 'medium',
     targetCoverageMonths: type === 'emergency' ? '6' : '',
   }
 }
 
-function monthsUntil(targetDate: string) {
+function monthsUntil(targetDate: string, asOfDate: string) {
   const target = new Date(`${targetDate}T00:00:00`)
   if (Number.isNaN(target.getTime())) return 0
-  const now = new Date('2026-06-20T00:00:00')
+  const now = new Date(`${asOfDate.slice(0, 10)}T00:00:00`)
   return Math.max(0, (target.getFullYear() - now.getFullYear()) * 12 + target.getMonth() - now.getMonth())
 }
 
-export function validateGoalForm(goal: GoalFormState) {
+export function validateGoalForm(goal: GoalFormState, asOfDate: string) {
   const targetAmount = Number(goal.targetAmount)
   const currentSaved = Number(goal.currentSaved || 0)
   const plannedMonthlyContribution = Number(goal.plannedMonthlyContribution || 0)
@@ -74,12 +74,11 @@ export function validateGoalForm(goal: GoalFormState) {
   if (!Number.isFinite(currentSaved) || currentSaved < 0) return 'El avance actual no puede ser negativo.'
   if (!Number.isFinite(plannedMonthlyContribution) || plannedMonthlyContribution < 0) return 'La aportacion mensual no puede ser negativa.'
   if (!goal.targetDate || Number.isNaN(new Date(`${goal.targetDate}T00:00:00`).getTime())) return 'Selecciona una fecha objetivo valida.'
-  if (monthsUntil(goal.targetDate) === 0 && currentSaved < targetAmount) return 'La fecha objetivo debe ser futura si aun falta dinero.'
+  if (monthsUntil(goal.targetDate, asOfDate) === 0 && currentSaved < targetAmount) return 'La fecha objetivo debe ser futura si aun falta dinero.'
   return ''
 }
 
-export function goalFormToGoal(goal: GoalFormState): Goal {
-  const now = new Date().toISOString()
+export function goalFormToGoal(goal: GoalFormState, timestamp: string): Goal {
   return {
     id: `goal-${Date.now()}`,
     name: goal.name.trim(),
@@ -91,17 +90,17 @@ export function goalFormToGoal(goal: GoalFormState): Goal {
     currency: 'MXN',
     priority: goal.priority,
     targetCoverageMonths: goal.type === 'emergency' && goal.targetCoverageMonths ? Number(goal.targetCoverageMonths) : undefined,
-    createdAt: now,
-    updatedAt: now,
+    createdAt: timestamp,
+    updatedAt: timestamp,
   }
 }
 
-export function goalFormEstimate(goal: GoalFormState) {
+export function goalFormEstimate(goal: GoalFormState, asOfDate: string) {
   const targetAmount = Number(goal.targetAmount)
   const currentSaved = Number(goal.currentSaved || 0)
   if (!Number.isFinite(targetAmount) || targetAmount <= 0) return null
   const remaining = Math.max(0, targetAmount - currentSaved)
-  const months = Math.max(1, monthsUntil(goal.targetDate))
+  const months = Math.max(1, monthsUntil(goal.targetDate, asOfDate))
   return {
     remaining,
     months,

@@ -14,6 +14,13 @@ export function Planning({
   onCreateGoal: () => void
 }) {
   const hasGoals = profile.goals.length > 0
+  const historicalSavings = [...profile.monthlySnapshots]
+    .filter((snapshot) => snapshot.month < metrics.asOfDate.slice(0, 7))
+    .sort((left, right) => left.month.localeCompare(right.month))
+    .slice(-6)
+    .map((snapshot) => snapshot.savings)
+    .sort((left, right) => left - right)
+  const scenario = (percentile: number): number => historicalSavings[Math.floor((historicalSavings.length - 1) * percentile)] ?? 0
   return (
     <section className="panel wide">
       <div className="panel-heading">
@@ -35,7 +42,7 @@ export function Planning({
         <article>
           <span>Capacidad mensual</span>
           <strong>{metrics.goalMonthlyCapacity > 0 ? mxn(metrics.goalMonthlyCapacity) : 'Sin datos'}</strong>
-          <small>Promedio de ahorro reciente disponible para metas.</small>
+          <small>Promedio de hasta seis meses completos, incluidos meses negativos.</small>
         </article>
         <article>
           <span>Carga de metas</span>
@@ -43,6 +50,26 @@ export function Planning({
           <small>{Number.isFinite(metrics.goalLoadRatio) ? `${pct(metrics.goalLoadRatio)} de capacidad` : 'Captura ahorro mensual.'}</small>
         </article>
       </div>
+
+      {historicalSavings.length >= 3 && (
+        <div className="goal-summary-grid" aria-label="Escenarios de capacidad histórica">
+          <article>
+            <span>Escenario bajo</span>
+            <strong>{mxn(scenario(0.25))}</strong>
+            <small>Percentil 25 de los últimos {historicalSavings.length} meses completos.</small>
+          </article>
+          <article>
+            <span>Escenario base</span>
+            <strong>{mxn(scenario(0.5))}</strong>
+            <small>Mediana histórica; no es una recomendación.</small>
+          </article>
+          <article>
+            <span>Escenario alto</span>
+            <strong>{mxn(scenario(0.75))}</strong>
+            <small>Percentil 75 de los últimos {historicalSavings.length} meses completos.</small>
+          </article>
+        </div>
+      )}
 
       {!hasGoals && (
         <div className="empty-goals">

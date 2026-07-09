@@ -43,12 +43,10 @@ async function expectNoProfilesOrDashboard(page: Page) {
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toHaveCount(0)
   await expect(page.locator('[aria-label="Perfil activo"]')).toHaveCount(0)
   await expect(page.locator('[aria-label="Navegacion principal"]')).toHaveCount(0)
-  await expect(page.locator('.kpi', { hasText: 'Salud financiera' })).toHaveCount(0)
+  await expect(page.locator('.kpi', { hasText: 'Score Finanzas OS' })).toHaveCount(0)
   await expect(page.getByText('Ahorro saludable')).toHaveCount(0)
   await expect(page.getByText('Metas grandes')).toHaveCount(0)
   await expect(page.locator('.profile-card')).toHaveCount(0)
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem('finanzas-os-profiles-cleared'))).toBe('true')
-
   const profilesResponse = await page.request.get('/api/profiles')
   expect(profilesResponse.ok()).toBe(true)
   const body = (await profilesResponse.json()) as { profiles: unknown[] }
@@ -58,9 +56,12 @@ async function expectNoProfilesOrDashboard(page: Page) {
 async function putStaleLocalProfile(page: Page) {
   await page.evaluate(async (profile) => {
     await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.open('finanzas-personales-local')
+      const request = indexedDB.open('finanzas-personales-local-stale', 1)
 
       request.onerror = () => reject(request.error ?? new Error('No se pudo abrir IndexedDB.'))
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore('profiles', { keyPath: 'id' })
+      }
       request.onsuccess = () => {
         const database = request.result
         const transaction = database.transaction('profiles', 'readwrite')
@@ -129,7 +130,7 @@ test('opens a profile dashboard as a distinct view', async ({ page }) => {
 
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toHaveCount(0)
   await expect(page.locator('[aria-label="Perfil activo"]')).toBeVisible()
-  await expect(page.getByText('Salud financiera')).toBeVisible()
+  await expect(page.locator('.kpi', { hasText: 'Score Finanzas OS' })).toBeVisible()
 
   await page.getByRole('button', { name: /Ver perfiles/i }).click()
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toBeVisible()
@@ -142,7 +143,7 @@ test('opens the selected profile dashboard from profile management', async ({ pa
 
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toHaveCount(0)
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('Metas grandes')
-  await expect(page.getByText('Salud financiera')).toBeVisible()
+  await expect(page.locator('.kpi', { hasText: 'Score Finanzas OS' })).toBeVisible()
 })
 
 test('deletes all profiles quickly with a two-step confirmation and restores examples', async ({ page }) => {
@@ -165,7 +166,7 @@ test('deletes all profiles quickly with a two-step confirmation and restores exa
   await expect(page.getByText(/Perfiles de ejemplo restaurados/i)).toBeVisible()
 })
 
-test('does not rehydrate stale IndexedDB profiles after profiles were cleared', async ({ page }) => {
+test('blocks the workspace instead of rehydrating IndexedDB when SQLite is unavailable', async ({ page }) => {
   await page.getByRole('button', { name: 'Borrar todos los perfiles' }).click()
   await page.getByRole('button', { name: 'Confirmar borrar todos los perfiles' }).click()
   await expectNoProfilesOrDashboard(page)
@@ -180,14 +181,32 @@ test('does not rehydrate stale IndexedDB profiles after profiles were cleared', 
   })
 
   await page.reload()
-  await expectNoProfilesOrDashboard(page)
+  await expect(page.getByRole('heading', { name: 'No se pudo abrir SQLite local' })).toBeVisible()
+  await expect(page.getByText('Ahorro saludable')).toHaveCount(0)
+})
+
+test('rejects malformed, oversized, and non-local API requests', async ({ page }) => {
+  const invalidProfile = await page.request.put('/api/profiles/invalid', {
+    data: { id: 'invalid', name: 'Perfil incompleto' },
+  })
+  expect(invalidProfile.status()).toBe(400)
+
+  const rejectedOrigin = await page.request.get('/api/health', {
+    headers: { origin: 'http://untrusted.example' },
+  })
+  expect(rejectedOrigin.status()).toBe(403)
+
+  const oversizedPayload = await page.request.post('/api/knowledge/explain', {
+    data: { text: 'x'.repeat(2 * 1024 * 1024) },
+  })
+  expect(oversizedPayload.status()).toBe(413)
 })
 
 test('creates a profile and deletes it individually with confirmation', async ({ page }) => {
   await page.getByRole('button', { name: /Nuevo perfil/i }).first().click()
   const dialog = page.getByRole('dialog', { name: /Crear perfil financiero/i })
   await dialog.getByLabel('Nombre del perfil').fill('E2E Perfil borrable')
-  await dialog.getByLabel('Descripcion').fill('Perfil sintetico para validar borrado individual.')
+  await dialog.getByLabel('Descripcion', { exact: true }).fill('Perfil sintetico para validar borrado individual.')
   await dialog.getByRole('button', { name: /Crear y capturar datos/i }).click()
 
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('E2E Perfil borrable')
@@ -243,7 +262,7 @@ test('shows and navigates the empty desktop dashboard for a real profile', async
   await expect(page.locator('[aria-label="Navegacion principal"]')).toBeVisible()
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('E2E Perfil vacio desktop')
 
-  await page.getByRole('button', { name: 'Dashboard' }).click()
+  await page.getByRole('button', { name: 'Estado actual' }).click()
 
   const emptyDashboard = page.locator('.empty-dashboard-grid')
   await expect(page.getByRole('heading', { name: 'E2E Perfil vacio desktop' })).toBeVisible()
@@ -256,7 +275,7 @@ test('shows and navigates the empty desktop dashboard for a real profile', async
   await expect(page.locator('[aria-label="Preparacion del dashboard"]')).toContainText('Perfil independiente')
   await expect(page.locator('[aria-label="Vista previa profesional del dashboard sin datos"]')).toContainText('Preview operativo')
   await expect(page.locator('[aria-label="Preparacion 0 por ciento"]')).toContainText('0%')
-  await expect(page.locator('[aria-label="Indicadores pendientes"]')).toContainText('Salud financiera')
+  await expect(page.locator('[aria-label="Indicadores pendientes"]')).toContainText('Score Finanzas OS')
   await expect(page.locator('[aria-label="Paneles pendientes"]')).toContainText('Datos locales por perfil')
   await expect(page.locator('.kpi')).toHaveCount(0)
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toHaveCount(0)
@@ -264,11 +283,11 @@ test('shows and navigates the empty desktop dashboard for a real profile', async
   await emptyDashboard.getByRole('button', { name: 'Capturar primer dato' }).click()
   await expect(page.getByRole('heading', { name: 'Crear meta' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Dashboard' }).click()
+  await page.getByRole('button', { name: 'Estado actual' }).click()
   await emptyDashboard.getByRole('button', { name: 'Importar documentos' }).click()
   await expect(page.getByRole('heading', { name: 'Ingreso de documentos' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Dashboard' }).click()
+  await page.getByRole('button', { name: 'Estado actual' }).click()
   await emptyDashboard.getByRole('button', { name: 'Crear primera meta' }).click()
   await expect(page.getByRole('heading', { name: 'Metas y planeacion' })).toBeVisible()
 })
@@ -278,31 +297,71 @@ test('creates a manual profile and captures an account plus movement', async ({ 
   const dialog = page.getByRole('dialog', { name: /Crear perfil financiero/i })
   await expect(dialog).toBeVisible()
   await dialog.getByLabel('Nombre del perfil').fill('E2E Perfil captura')
-  await dialog.getByLabel('Descripcion').fill('Perfil sintetico para probar captura manual.')
+  await dialog.getByLabel('Descripcion', { exact: true }).fill('Perfil sintetico para probar captura manual.')
   await dialog.getByRole('button', { name: /Crear y capturar datos/i }).click()
 
   await expect(page.getByRole('heading', { name: 'Crear meta' })).toBeVisible()
-  const accountPanel = page.locator('.capture-card').filter({ has: page.getByRole('heading', { name: 'Agregar cuenta' }) })
+  const accountPanel = page.locator('.capture-card').filter({ has: page.getByRole('heading', { name: 'Agregar cuenta o deuda' }) })
   await accountPanel.getByLabel('Nombre').fill('E2E Cuenta Nomina')
   await accountPanel.getByLabel('Saldo actual').fill('25000')
-  await accountPanel.getByRole('button', { name: /Guardar cuenta/i }).click()
+  await accountPanel.getByRole('button', { name: /Agregar cuenta/i }).click()
   await expect(accountPanel.getByLabel('Nombre')).toBeEmpty()
 
-  const movementPanel = page.locator('.capture-card').filter({ has: page.getByRole('heading', { name: 'Agregar movimiento' }) })
+  const movementPanel = page.locator('.capture-card').filter({ has: page.getByRole('heading', { name: 'Registrar movimiento' }) })
   await movementPanel.getByLabel('Monto').fill('1200')
   await movementPanel.getByLabel('Comercio / origen').fill('E2E Supermercado')
-  await movementPanel.getByLabel('Categoria').fill('Supermercado')
+  await movementPanel.getByLabel('Categoría').fill('Supermercado')
   await movementPanel.getByRole('button', { name: /Guardar movimiento/i }).click()
 
   await page.getByRole('button', { name: 'Estado actual' }).click()
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('E2E Perfil captura')
-  await expect(page.getByText('Salud financiera')).toBeVisible()
+  await expect(page.locator('.kpi', { hasText: 'Score Finanzas OS' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Captura' }).click()
+  await page.getByRole('button', { name: 'Movimientos' }).click()
   await expect(page.getByRole('heading', { name: 'Crear meta' })).toBeVisible()
-  await page.getByRole('button', { name: 'Dashboard' }).click()
+  await page.getByRole('button', { name: 'Estado actual' }).click()
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('E2E Perfil captura')
-  await expect(page.getByText('Salud financiera')).toBeVisible()
+  await expect(page.locator('.kpi', { hasText: 'Score Finanzas OS' })).toBeVisible()
+})
+
+test('records a card purchase and payment without double-counting the debt', async ({ page }) => {
+  await page.getByRole('button', { name: /Nuevo perfil/i }).first().click()
+  const dialog = page.getByRole('dialog', { name: /Crear perfil financiero/i })
+  await dialog.getByLabel('Nombre del perfil').fill('E2E Tarjeta')
+  await dialog.getByRole('button', { name: /Crear y capturar datos/i }).click()
+
+  const accountPanel = page.locator('.capture-card').filter({ has: page.getByRole('heading', { name: 'Agregar cuenta o deuda' }) })
+  await accountPanel.getByLabel('Nombre').fill('E2E Nómina')
+  await accountPanel.getByLabel('Saldo actual').fill('10000')
+  await accountPanel.getByRole('button', { name: /Agregar cuenta/i }).click()
+
+  await accountPanel.getByLabel('Nombre').fill('E2E Tarjeta')
+  await accountPanel.getByLabel('Tipo').selectOption('credit_card')
+  await accountPanel.getByLabel('Saldo adeudado').fill('0')
+  await accountPanel.getByLabel('Límite de crédito').fill('5000')
+  await accountPanel.getByLabel('Pago mínimo').fill('100')
+  await accountPanel.getByLabel('Fecha límite').fill('2026-07-31')
+  await accountPanel.getByRole('button', { name: /Agregar cuenta/i }).click()
+
+  const movementPanel = page.locator('.capture-card').filter({ has: page.getByRole('heading', { name: 'Registrar movimiento' }) })
+  await movementPanel.getByLabel('Cuenta').selectOption({ label: 'E2E Tarjeta' })
+  await movementPanel.getByLabel('Monto').fill('350')
+  await movementPanel.getByLabel('Comercio / origen').fill('Compra tarjeta E2E')
+  await movementPanel.getByRole('button', { name: /Guardar movimiento/i }).click()
+
+  await movementPanel.getByLabel('Tipo').selectOption('debt_payment')
+  await movementPanel.getByLabel('Cuenta de origen').selectOption({ label: 'E2E Nómina' })
+  await movementPanel.getByLabel('Deuda destino').selectOption({ label: 'E2E Tarjeta' })
+  await movementPanel.getByLabel('Monto').fill('100')
+  await movementPanel.getByLabel('Comercio / origen').fill('Pago tarjeta E2E')
+  await movementPanel.getByRole('button', { name: /Guardar movimiento/i }).click()
+
+  const profilesResponse = await page.request.get('/api/profiles')
+  const body = (await profilesResponse.json()) as { profiles: FinancialProfile[] }
+  const saved = body.profiles.find((profile) => profile.name === 'E2E Tarjeta')
+  expect(saved?.accounts.find((account) => account.name === 'E2E Nómina')?.balance).toBe(9900)
+  expect(saved?.accounts.find((account) => account.name === 'E2E Tarjeta')?.balance).toBe(-250)
+  expect(saved?.debts.find((debt) => debt.name === 'E2E Tarjeta')?.balance).toBe(250)
 })
 
 test('creates a profile with a starter goal and opens planning', async ({ page }) => {
@@ -326,7 +385,7 @@ test('creates a profile with a starter goal and opens planning', async ({ page }
 test('shows planning details for the goals demo profile', async ({ page }) => {
   const profileCard = page.locator('.profile-card', { hasText: 'Metas grandes' })
   await profileCard.getByRole('button', { name: /Abrir dashboard/i }).click()
-  await page.getByRole('button', { name: 'Planeacion' }).click()
+  await page.getByRole('button', { name: 'Metas' }).click()
 
   await expect(page.getByRole('heading', { name: 'Metas y planeacion' })).toBeVisible()
   await expect(page.getByText('Fondo emergencia 6 meses')).toBeVisible()
@@ -1235,7 +1294,8 @@ test('keeps invalid dates and non-CFDI XML in review without applying movements'
 })
 
 test('searches and explains concepts in the knowledge matrix', async ({ page }) => {
-  await page.getByRole('button', { name: 'Matriz' }).click()
+  await page.getByRole('button', { name: 'Más' }).click()
+  await page.getByRole('button', { name: 'Matriz financiera' }).click()
   await expect(page.getByRole('heading', { name: 'Matriz de conocimiento Mexico' })).toBeVisible()
   await expect(page.getByLabel('Secciones de matriz financiera')).toBeVisible()
   await expect(page.getByLabel('Cobertura de fuentes oficiales')).toContainText('fuentes')
@@ -1255,6 +1315,7 @@ test('searches and explains concepts in the knowledge matrix', async ({ page }) 
 })
 
 test('shows privacy controls and local-data messaging', async ({ page }) => {
+  await page.getByRole('button', { name: 'Más' }).click()
   await page.getByRole('button', { name: 'Privacidad' }).click()
 
   await expect(page.getByRole('heading', { name: 'Privacidad operativa' })).toBeVisible()

@@ -1,38 +1,34 @@
 import { createServer } from 'node:http'
-import { networkInterfaces } from 'node:os'
+import { randomUUID } from 'node:crypto'
+import { basename } from 'node:path'
 import { database, dbPath, rowToKnowledge, rowToProfile, writeAudit } from './db.mjs'
+import { financialProfileSchema, knowledgeExplainRequestSchema, migrateProfile } from './profile-schema.mjs'
 
 const port = Number(process.env.FINANZAS_API_PORT ?? 4147)
+const lanMode = process.env.FINANZAS_LAN_MODE === '1'
+const configuredOrigins = new Set(
+  (process.env.FINANZAS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+)
 
-function localNetworkHosts() {
-  return new Set(
-    Object.values(networkInterfaces())
-      .flatMap((interfaces) => interfaces ?? [])
-      .filter((address) => address.family === 'IPv4' && !address.internal)
-      .map((address) => address.address),
-  )
-}
-
-const allowedLocalHosts = localNetworkHosts()
+const maxJsonBytes = 2 * 1024 * 1024
 
 function isLocalDevelopmentHost(hostname) {
   const normalized = hostname.toLowerCase()
-  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || allowedLocalHosts.has(hostname)
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
 }
 
 function isAllowedOrigin(origin) {
-  if (!origin) return true
-  const configuredOrigins = (process.env.FINANZAS_ALLOWED_ORIGINS ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-  if (configuredOrigins.includes(origin)) return true
+  if (!origin) return !lanMode
+  if (configuredOrigins.has(origin)) return true
 
   try {
     const url = new URL(origin)
     if (url.protocol !== 'http:') return false
     const hostname = url.hostname.toLowerCase()
-    return isLocalDevelopmentHost(hostname)
+    return isLocalDevelopmentHost(hostname) && (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1')
   } catch {
     return false
   }
@@ -53,7 +49,16 @@ function send(res, status, body, origin) {
 
 async function readJson(req) {
   const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > maxJsonBytes) {
+      const error = new Error('payload_too_large')
+      error.code = 'PAYLOAD_TOO_LARGE'
+      throw error
+    }
+    chunks.push(chunk)
+  }
   if (!chunks.length) return null
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
@@ -63,10 +68,15 @@ function isAllowedRequest(req) {
 }
 
 function listProfiles() {
-  return database.prepare('SELECT data_json FROM profiles ORDER BY updated_at DESC').all().map(rowToProfile)
+  return database
+    .prepare('SELECT data_json FROM profiles ORDER BY updated_at DESC')
+    .all()
+    .map(rowToProfile)
+    .map(migrateProfile)
 }
 
 function upsertProfile(profile) {
+  const validatedProfile = financialProfileSchema.parse(migrateProfile(profile))
   database
     .prepare(
       `INSERT INTO profiles (id, name, data_json)
@@ -76,8 +86,9 @@ function upsertProfile(profile) {
          data_json = excluded.data_json,
          updated_at = CURRENT_TIMESTAMP`,
     )
-    .run(profile.id, profile.name, JSON.stringify(profile))
-  writeAudit('profile', profile.id, 'upsert', { name: profile.name })
+    .run(validatedProfile.id, validatedProfile.name, JSON.stringify(validatedProfile))
+  writeAudit('profile', validatedProfile.id, 'upsert', { name: validatedProfile.name })
+  return validatedProfile
 }
 
 function deleteAllProfiles() {
@@ -193,7 +204,7 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
-      return send(res, 200, { ok: true, dbPath, mode: 'sqlite-local-file' }, origin)
+      return send(res, 200, { ok: true, dbFile: basename(dbPath), mode: lanMode ? 'sqlite-local-lan' : 'sqlite-local-file', writable: true }, origin)
     }
 
     if (req.method === 'GET' && url.pathname === '/api/profiles') {
@@ -201,10 +212,12 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'PUT' && url.pathname.startsWith('/api/profiles/')) {
+      if (!req.headers['content-type']?.startsWith('application/json')) return send(res, 415, { error: 'Content-Type debe ser application/json.' }, origin)
       const profile = await readJson(req)
-      if (!profile?.id || !profile?.name) return send(res, 400, { error: 'Perfil invalido.' }, origin)
-      upsertProfile(profile)
-      return send(res, 200, { profile }, origin)
+      const profileId = decodeURIComponent(url.pathname.split('/').at(-1) ?? '')
+      if (!profile?.id || !profile?.name || profile.id !== profileId) return send(res, 400, { error: 'Perfil invalido.' }, origin)
+      const savedProfile = upsertProfile(profile)
+      return send(res, 200, { profile: savedProfile }, origin)
     }
 
     if (req.method === 'DELETE' && url.pathname === '/api/profiles') {
@@ -231,17 +244,23 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/knowledge/explain') {
-      const body = await readJson(req)
-      return send(res, 200, { matches: explainText(String(body?.text ?? '')) }, origin)
+      if (!req.headers['content-type']?.startsWith('application/json')) return send(res, 415, { error: 'Content-Type debe ser application/json.' }, origin)
+      const body = knowledgeExplainRequestSchema.parse(await readJson(req))
+      return send(res, 200, { matches: explainText(body.text) }, origin)
     }
 
     return send(res, 404, { error: 'Ruta no encontrada.' }, origin)
   } catch (error) {
-    return send(res, 500, { error: error instanceof Error ? error.message : 'Error interno.' }, origin)
+    if (error?.code === 'PAYLOAD_TOO_LARGE') return send(res, 413, { error: 'El cuerpo excede el limite permitido.' }, origin)
+    if (error instanceof SyntaxError) return send(res, 400, { error: 'JSON invalido.' }, origin)
+    if (error?.name === 'ZodError') return send(res, 400, { error: 'Perfil invalido.' }, origin)
+    const errorId = randomUUID()
+    console.error(`API error ${errorId}`, error)
+    return send(res, 500, { error: `Error interno. Referencia: ${errorId}` }, origin)
   }
 })
 
-server.listen(port, '127.0.0.1', () => {
+server.listen(port, lanMode ? '0.0.0.0' : '127.0.0.1', () => {
   console.log(`Finanzas OS API on http://127.0.0.1:${port}`)
   console.log(`SQLite file: ${dbPath}`)
 })

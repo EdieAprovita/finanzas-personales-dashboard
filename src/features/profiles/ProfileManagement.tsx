@@ -41,7 +41,7 @@ export function ProfileSwitcher({
         <small>{profiles.length} perfil(es)</small>
       </div>
       <div className="profile-control">
-        {activeFacts && (
+        {activeFacts && activeProfile && (
           <div className="active-profile-summary">
             <strong>{profileDisplayName(activeProfile, profiles)}</strong>
             <span>

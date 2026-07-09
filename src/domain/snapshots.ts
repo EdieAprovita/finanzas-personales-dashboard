@@ -1,6 +1,7 @@
 import type { FinancialProfile } from './types'
 
-export function recalculateLatestSnapshot(profile: FinancialProfile): FinancialProfile {
+export function recalculateLatestSnapshot(profile: FinancialProfile, asOfDate: string): FinancialProfile {
+  const currentMonth = asOfDate.slice(0, 7)
   if (profile.importedDocuments.length > 0 && profile.transactions.length > 0) {
     const byMonth = new Map<string, { income: number; expenses: number; debtPayments: number }>()
     for (const tx of profile.transactions) {
@@ -14,11 +15,14 @@ export function recalculateLatestSnapshot(profile: FinancialProfile): FinancialP
     const accountAssets = profile.accounts
       .filter((account) => !['credit_card', 'loan'].includes(account.type))
       .reduce((sum, account) => sum + Math.max(0, account.balance), 0)
+    const linkedDebtAccountIds = new Set(profile.debts.map((debt) => debt.accountId).filter(Boolean))
     const accountLiabilities = profile.accounts
-      .filter((account) => ['credit_card', 'loan'].includes(account.type))
+      .filter((account) => ['credit_card', 'loan'].includes(account.type) && !linkedDebtAccountIds.has(account.id))
       .reduce((sum, account) => sum + Math.abs(Math.min(0, account.balance)), 0)
     const debtLiabilities = profile.debts.reduce((sum, debt) => sum + debt.balance, 0)
     const netWorth = accountAssets - accountLiabilities - debtLiabilities
+    const previousSnapshots = new Map(profile.monthlySnapshots.map((row) => [row.month, row]))
+    const latestTransactionMonth = [...byMonth.keys()].sort().at(-1)
     const monthlySnapshots = [...byMonth.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([snapshotMonth, values]) => ({
@@ -26,8 +30,8 @@ export function recalculateLatestSnapshot(profile: FinancialProfile): FinancialP
         income: values.income,
         expenses: values.expenses,
         debtPayments: values.debtPayments,
-        savings: Math.max(0, values.income - values.expenses - values.debtPayments),
-        netWorth,
+        savings: values.income - values.expenses - values.debtPayments,
+        netWorth: previousSnapshots.get(snapshotMonth)?.netWorth ?? (snapshotMonth === latestTransactionMonth ? netWorth : 0),
       }))
     return {
       ...profile,
@@ -35,8 +39,9 @@ export function recalculateLatestSnapshot(profile: FinancialProfile): FinancialP
     }
   }
 
-  const month = new Date().toISOString().slice(0, 7)
+  const month = currentMonth
   const currentMonthTransactions = profile.transactions.filter((tx) => tx.date.startsWith(month))
+  if (currentMonthTransactions.length === 0) return profile
   const income = currentMonthTransactions.filter((tx) => tx.type === 'income').reduce((sum, tx) => sum + Math.max(0, tx.amount), 0)
   const expenses = currentMonthTransactions
     .filter((tx) => tx.type === 'expense')
@@ -47,8 +52,9 @@ export function recalculateLatestSnapshot(profile: FinancialProfile): FinancialP
   const accountAssets = profile.accounts
     .filter((account) => !['credit_card', 'loan'].includes(account.type))
     .reduce((sum, account) => sum + Math.max(0, account.balance), 0)
+  const linkedDebtAccountIds = new Set(profile.debts.map((debt) => debt.accountId).filter(Boolean))
   const accountLiabilities = profile.accounts
-    .filter((account) => ['credit_card', 'loan'].includes(account.type))
+    .filter((account) => ['credit_card', 'loan'].includes(account.type) && !linkedDebtAccountIds.has(account.id))
     .reduce((sum, account) => sum + Math.abs(Math.min(0, account.balance)), 0)
   const debtLiabilities = profile.debts.reduce((sum, debt) => sum + debt.balance, 0)
   const netWorth = accountAssets - accountLiabilities - debtLiabilities
@@ -57,7 +63,7 @@ export function recalculateLatestSnapshot(profile: FinancialProfile): FinancialP
     income,
     expenses,
     debtPayments,
-    savings: Math.max(0, income - expenses - debtPayments),
+    savings: income - expenses - debtPayments,
     netWorth,
   }
   const snapshots = profile.monthlySnapshots.filter((row) => row.month !== month)

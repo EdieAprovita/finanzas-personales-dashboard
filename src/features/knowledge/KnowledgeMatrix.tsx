@@ -48,6 +48,7 @@ function entryMatchesSection(entry: KnowledgeEntry, section: KnowledgeSection) {
 
 function filterEntries(entries: KnowledgeEntry[], sectionKey: string, query: string) {
   const section = knowledgeSections.find((item) => item.key === sectionKey) ?? knowledgeSections[0]
+  if (!section) return entries
   const queryTokens = normalize(query).split(/\s+/).filter(Boolean)
   return entries.filter((entry) => {
     const haystack = entryText(entry)

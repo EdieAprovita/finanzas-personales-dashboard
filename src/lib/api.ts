@@ -39,7 +39,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function getApiHealth() {
-  return request<{ ok: boolean; dbPath: string; mode: string }>('/api/health')
+  return request<{ ok: boolean; dbFile: string; mode: string; writable: boolean }>('/api/health')
 }
 
 export async function getProfiles() {

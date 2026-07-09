@@ -178,7 +178,9 @@ function normalizeDate(value: string) {
   if (iso) return validIsoDate(Number(iso[1]), Number(iso[2]), Number(iso[3]))
   const dmy = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/)
   if (dmy) {
-    const year = dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3]
+    const rawYear = dmy[3]
+    if (!rawYear) return ''
+    const year = rawYear.length === 2 ? `20${rawYear}` : rawYear
     const dayFirst = validIsoDate(Number(year), Number(dmy[2]), Number(dmy[1]))
     if (dayFirst) return dayFirst
     return validIsoDate(Number(year), Number(dmy[1]), Number(dmy[2]))
@@ -219,8 +221,10 @@ function normalizeDate(value: string) {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .match(/^(\d{1,2})\s+(?:de\s+)?([a-z]{3,10})\.?\s+(?:de\s+)?(\d{4})/)
-  if (textDate && monthNames[textDate[2]]) {
-    return validIsoDate(Number(textDate[3]), Number(monthNames[textDate[2]]), Number(textDate[1]))
+  const textMonth = textDate?.[2]
+  const monthNumber = textMonth ? monthNames[textMonth] : undefined
+  if (textDate && monthNumber) {
+    return validIsoDate(Number(textDate[3]), Number(monthNumber), Number(textDate[1]))
   }
   return ''
 }
@@ -388,11 +392,11 @@ function extractPositionFacts(text: string) {
     .slice(0, 50)
     .map((match) =>
       cleanPositionFact({
-        name: match[1].trim(),
-        instrumentType: match[2].trim().toUpperCase(),
-        quantity: numberFromPatterns(match[3], [/([\d,.]+)/]),
-        price: parseMoney(match[4]),
-        marketValue: parseMoney(match[5]),
+        name: (match[1] ?? '').trim(),
+        instrumentType: (match[2] ?? '').trim().toUpperCase(),
+        quantity: numberFromPatterns(match[3] ?? '', [/([\d,.]+)/]),
+        price: parseMoney(match[4] ?? ''),
+        marketValue: parseMoney(match[5] ?? ''),
         unrealizedGain: match[6] ? parseMoney(match[6]) : undefined,
       }),
     )
@@ -405,8 +409,8 @@ function extractPositionFacts(text: string) {
     .slice(0, 50)
     .map((match) =>
       cleanPositionFact({
-        name: match[1].trim(),
-        balance: parseMoney(match[2]),
+        name: (match[1] ?? '').trim(),
+        balance: parseMoney(match[2] ?? ''),
         contributions: match[3] ? parseMoney(match[3]) : undefined,
         withdrawals: match[4] ? parseMoney(match[4]) : undefined,
         periodReturn: match[5] ? parseMoney(match[5]) : undefined,
@@ -487,7 +491,7 @@ function extractBankStatementMovementFacts(text: string) {
       /movimiento\s*:\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\s*\|\s*(?:descripcion|descripci[oó]n|concepto)\s*:\s*([^|]+?)\s*\|\s*(?:dep[oó]sito|abono|entrada)\s*:\s*\$?\s*(-?[\d,.]+)\s*\|\s*(?:retiro|cargo|salida)\s*:\s*\$?\s*(-?[\d,.]+)\s*\|\s*saldo\s*:\s*\$?\s*(-?[\d,.]+)/gi,
     ),
   ]
-    .map((match) => buildStatementMovementRow(match[1], match[2], match[3], match[4], match[5]))
+    .map((match) => buildStatementMovementRow(match[1] ?? '', match[2] ?? '', match[3] ?? '', match[4] ?? '', match[5] ?? ''))
     .filter((row): row is PositionFact => Boolean(row))
 
   const tableSections = [
@@ -495,14 +499,14 @@ function extractBankStatementMovementFacts(text: string) {
       /(?:fecha|date)\s+(?:concepto|descripci[oó]n|descripcion|description|detalle)\s+(?:dep[oó]sito|deposito|abono|credit|cr[eé]dito)\s+(?:retiro|cargo|withdrawal|debit|d[eé]bito)\s+saldo([\s\S]{0,3000})/gi,
     ),
   ]
-    .map((match) => match[1])
+    .map((match) => match[1] ?? '')
     .join(' ')
   const tabularRows = [
     ...tableSections.matchAll(
       /(?:^|\s)(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\s+([A-ZÁÉÍÓÚÜÑ0-9][A-ZÁÉÍÓÚÜÑ0-9 .,&/+-]{3,90}?)\s+\$?(-?[\d.,]+)\s+\$?(-?[\d.,]+)\s+\$?(-?[\d.,]+)(?=\s+(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\s+|\s+(?:fecha|saldo\s+final|total|pagina|p[aá]gina|page|periodo)\b|$)/gi,
     ),
   ]
-    .map((match) => buildStatementMovementRow(match[1], match[2], match[3], match[4], match[5]))
+    .map((match) => buildStatementMovementRow(match[1] ?? '', match[2] ?? '', match[3] ?? '', match[4] ?? '', match[5] ?? ''))
     .filter((row): row is PositionFact => Boolean(row))
 
   const signedTableSections = [
@@ -510,7 +514,7 @@ function extractBankStatementMovementFacts(text: string) {
       /(?:fecha|date)\s+(?:concepto|descripci[oó]n|descripcion|description|detalle)\s+(?:monto|importe|amount)\s+saldo([\s\S]{0,3000})/gi,
     ),
   ]
-    .map((match) => match[1])
+    .map((match) => match[1] ?? '')
     .join(' ')
   let previousSignedBalance = explicitOpeningBalance
   const signedAmountRows = [
@@ -519,8 +523,8 @@ function extractBankStatementMovementFacts(text: string) {
     ),
   ]
     .map((match) => {
-      const row = buildStatementSignedMovementRow(match[1], match[2], match[3], match[4], previousSignedBalance)
-      previousSignedBalance = parseMoney(match[4])
+      const row = buildStatementSignedMovementRow(match[1] ?? '', match[2] ?? '', match[3] ?? '', match[4] ?? '', previousSignedBalance)
+      previousSignedBalance = parseMoney(match[4] ?? '')
       return row
     })
     .filter((row): row is PositionFact => Boolean(row))
@@ -668,21 +672,21 @@ function extractCreditCardMovementFacts(text: string) {
       /(?:fecha|date)\s+(?:concepto|descripci[oó]n|descripcion|description|detalle|comercio)\s+(?:cargo|cargos|compra|compras|charge)\s+(?:pago|pagos|abono|abonos|payment)\s+(?:cr[eé]dito|credito|bonificaci[oó]n|ajuste|credit)([\s\S]{0,3000})/gi,
     ),
   ]
-    .map((match) => match[1])
+    .map((match) => match[1] ?? '')
     .join(' ')
   const rows = [
     ...tableSections.matchAll(
       /(?:^|\s)(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\s+([A-ZÁÉÍÓÚÜÑ0-9][A-ZÁÉÍÓÚÜÑ0-9 .,&/+-]{3,90}?)\s+\$?(-?[\d.,]+)\s+\$?(-?[\d.,]+)\s+\$?(-?[\d.,]+)(?=\s+(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\s+|\s+(?:fecha|saldo|total|pagina|p[aá]gina|page|periodo|cat)\b|$)/gi,
     ),
   ]
-    .map((match) => buildCreditCardMovementRow(match[1], match[2], match[3], match[4], match[5]))
+    .map((match) => buildCreditCardMovementRow(match[1] ?? '', match[2] ?? '', match[3] ?? '', match[4] ?? '', match[5] ?? ''))
     .filter((row): row is PositionFact => Boolean(row))
   const signedTableSections = [
     ...text.matchAll(
       /(?:fecha|date)\s+(?:concepto|descripci[oó]n|descripcion|description|detalle|comercio)\s+(?:monto|importe|amount)\s+saldo([\s\S]{0,3000})/gi,
     ),
   ]
-    .map((match) => match[1])
+    .map((match) => match[1] ?? '')
     .join(' ')
   const previousBalance = moneyFromPatterns(normalizeForSearch(text), [/saldo\s+(?:anterior|previo)[^\d-]*(-?[\d,.]+)/])
   let previousSignedBalance = previousBalance
@@ -692,8 +696,8 @@ function extractCreditCardMovementFacts(text: string) {
     ),
   ]
     .map((match) => {
-      const row = buildCreditCardSignedMovementRow(match[1], match[2], match[3], match[4], previousSignedBalance)
-      previousSignedBalance = parseMoney(match[4])
+      const row = buildCreditCardSignedMovementRow(match[1] ?? '', match[2] ?? '', match[3] ?? '', match[4] ?? '', previousSignedBalance)
+      previousSignedBalance = parseMoney(match[4] ?? '')
       return row
     })
     .filter((row): row is PositionFact => Boolean(row))
@@ -771,13 +775,13 @@ function extractCreditCardPaymentScenarioFacts(text: string) {
     ...text.matchAll(
       /escenario\s*:\s*([^|]+?)\s*\|\s*(?:pago|mensualidad)\s*:\s*\$?\s*(-?[\d,.]+)\s*\|\s*(?:meses|plazo)\s*:\s*([\d,.]+)\s*\|\s*(?:inter[eé]s(?:es)?|intereses\s+estimados?)\s*:\s*\$?\s*(-?[\d,.]+)(?:\s*\|\s*(?:total|costo\s+total)\s*:\s*\$?\s*(-?[\d,.]+))?/gi,
     ),
-  ].map((match) => buildCreditCardPaymentScenario(match[1], match[2], match[3], match[4], match[5]))
+  ].map((match) => buildCreditCardPaymentScenario(match[1] ?? '', match[2] ?? '', match[3] ?? '', match[4] ?? '', match[5] ?? ''))
 
   const tabularRows = [
     ...sectionText.matchAll(
       /(pago\s+(?:m[ií]nimo(?:\s*(?:x|por)?\s*[25])?|para\s+no\s+generar\s+inter[eé]s(?:es)?)|m[ií]nimo\s*(?:x|por)?\s*[25])\s+\$?\s*(-?[\d,.]+)\s+([\d,.]+)\s+\$?\s*(-?[\d,.]+)(?:\s+\$?\s*(-?[\d,.]+))?/gi,
     ),
-  ].map((match) => buildCreditCardPaymentScenario(match[1], match[2], match[3], match[4], match[5]))
+  ].map((match) => buildCreditCardPaymentScenario(match[1] ?? '', match[2] ?? '', match[3] ?? '', match[4] ?? '', match[5] ?? ''))
 
   const seen = new Set<string>()
   const scenarios = [...labeledRows, ...tabularRows]
@@ -1364,7 +1368,7 @@ async function prepareImageForOcr(image: File | string): Promise<File | string> 
 
     const frame = context.getImageData(0, 0, canvas.width, canvas.height)
     for (let index = 0; index < frame.data.length; index += 4) {
-      const luminance = frame.data[index] * 0.299 + frame.data[index + 1] * 0.587 + frame.data[index + 2] * 0.114
+      const luminance = (frame.data[index] ?? 0) * 0.299 + (frame.data[index + 1] ?? 0) * 0.587 + (frame.data[index + 2] ?? 0) * 0.114
       const boosted = luminance < 180 ? Math.max(0, luminance * 0.78) : Math.min(255, 255 - (255 - luminance) * 0.58)
       frame.data[index] = boosted
       frame.data[index + 1] = boosted
@@ -1468,6 +1472,7 @@ function pdfTextPageFromContent(textContent: { items?: unknown[] }): PdfTextPage
         .reduce((lineText, run, index) => {
           if (index === 0) return run.str
           const previous = sorted[index - 1]
+          if (!previous) return `${lineText} ${run.str}`
           const gap = run.x - (previous.x + previous.width)
           const separator = gap > 32 ? '    ' : gap > 12 ? '  ' : ' '
           return `${lineText}${separator}${run.str}`
@@ -1596,7 +1601,9 @@ function payrollSplitMatchIds(targetAmount: number, candidates: Transaction[]) {
     if (selected.length >= 2 && Math.abs(sum - targetAmount) <= amountTolerance) return selected
     if (sum > targetAmount + amountTolerance || selected.length >= 4) return null
     for (let index = start; index < sorted.length; index += 1) {
-      const match = findSubset(index + 1, [...selected, sorted[index]], sum + sorted[index].amount)
+      const candidate = sorted[index]
+      if (!candidate) continue
+      const match = findSubset(index + 1, [...selected, candidate], sum + candidate.amount)
       if (match) return match
     }
     return null

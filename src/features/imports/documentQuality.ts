@@ -510,7 +510,7 @@ export function analyzeDocumentQuality(profile: FinancialProfile): DocumentQuali
         .slice(0, 2)
         .map((gap) => `${gap.label}: ${gap.legacyDocuments || gap.totalDocuments} documento(s) necesitan reimportacion o extraccion ampliada para ${gap.missingFields.slice(0, 3).map((field) => field.label).join(', ')}.`),
       ...buckets.map(actionForBucket),
-    ].slice(0, 4),
+    ].filter((action): action is string => Boolean(action)).slice(0, 4),
     risk: analyzeDocumentRisk(profile),
     captureGaps,
     captureReadiness: analyzeCaptureReadiness(documents),
