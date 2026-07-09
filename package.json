@@ -10,6 +10,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test:e2e": "node scripts/prepare-e2e.mjs && playwright test",
+    "test:unit": "vitest run src",
     "test:e2e:headed": "node scripts/prepare-e2e.mjs && playwright test --headed",
     "test:imports": "node scripts/validate-synthetic-imports.mjs",
     "test:imports:real": "node scripts/validate-real-imports.mjs --allow-real-docs",
@@ -19,8 +20,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "dexie": "^4.4.4",
-    "dexie-react-hooks": "^4.4.0",
     "fast-xml-parser": "^5.9.3",
     "lucide-react": "^1.21.0",
     "papaparse": "^5.5.4",
@@ -45,6 +44,7 @@
     "globals": "^17.6.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
-    "vite": "^8.0.12"
+    "vite": "^8.0.12",
+    "vitest": "^4.1.10"
   }
 }

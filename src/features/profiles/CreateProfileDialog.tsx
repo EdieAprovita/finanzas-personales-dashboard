@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { PencilLine, ReceiptText, Upload, X } from 'lucide-react'
 import { GoalForm } from '../goals/GoalForm'
 import type { GoalFormState } from '../goals/goalFormModel'
@@ -13,6 +15,7 @@ export function CreateProfileDialog({
   includeStarterGoal,
   starterGoal,
   starterGoalError,
+  asOfDate,
   isImporting,
   importQueue,
   onModeChange,
@@ -31,6 +34,7 @@ export function CreateProfileDialog({
   includeStarterGoal: boolean
   starterGoal: GoalFormState
   starterGoalError: string
+  asOfDate: string
   isImporting: boolean
   importQueue: string[]
   onModeChange: (mode: CreateProfileMode) => void
@@ -42,31 +46,70 @@ export function CreateProfileDialog({
   onSubmitManual: () => void
   onFiles: (files: File[]) => void
 }) {
+  const dialogRef = useRef<HTMLElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const appShell = document.querySelector('main.app-shell')
+    appShell?.setAttribute('inert', '')
+    closeButtonRef.current?.focus()
+
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]')]
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (!first || !last) return
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      appShell?.removeAttribute('inert')
+      previousFocusRef.current?.focus()
+    }
+  }, [onClose])
+
   function selectedFiles(fileList: FileList | null) {
     return Array.from(fileList ?? [])
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" role="presentation">
-      <section className="create-dialog" role="dialog" aria-modal="true" aria-labelledby="create-profile-title">
+      <section className="create-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="create-profile-title">
         <header className="dialog-header">
           <div>
             <p className="eyebrow">Nuevo perfil</p>
             <h2 id="create-profile-title">Crear perfil financiero</h2>
             <p>Elige si quieres iniciar manualmente o dejar que los documentos creen cuentas, movimientos y clasificacion.</p>
           </div>
-          <button type="button" className="icon-button" aria-label="Cerrar crear perfil" onClick={onClose}>
+          <button type="button" className="icon-button" aria-label="Cerrar crear perfil" onClick={onClose} ref={closeButtonRef}>
             <X size={20} />
           </button>
         </header>
 
         <div className="creation-options" role="tablist" aria-label="Metodo de creacion">
-          <button type="button" className={`creation-option ${mode === 'manual' ? 'active' : ''}`} onClick={() => onModeChange('manual')}>
+          <button type="button" role="tab" id="manual-profile-tab" aria-selected={mode === 'manual'} aria-controls="profile-creation-panel" className={`creation-option ${mode === 'manual' ? 'active' : ''}`} onClick={() => onModeChange('manual')}>
             <PencilLine size={20} />
             <strong>Manual</strong>
             <span>Nombre, descripcion y captura desde cero.</span>
           </button>
-          <button type="button" className={`creation-option ${mode === 'documents' ? 'active' : ''}`} onClick={() => onModeChange('documents')}>
+          <button type="button" role="tab" id="documents-profile-tab" aria-selected={mode === 'documents'} aria-controls="profile-creation-panel" className={`creation-option ${mode === 'documents' ? 'active' : ''}`} onClick={() => onModeChange('documents')}>
             <ReceiptText size={20} />
             <strong>Con documentos</strong>
             <span>PDF, CSV, XML o imagen para poblar el perfil.</span>
@@ -74,7 +117,7 @@ export function CreateProfileDialog({
         </div>
 
         {mode === 'manual' ? (
-          <div className="dialog-body">
+          <div className="dialog-body" role="tabpanel" id="profile-creation-panel" aria-labelledby="manual-profile-tab">
             <label>
               Nombre del perfil
               <input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder={`Mi plan financiero ${profileCount + 1}`} />
@@ -102,11 +145,11 @@ export function CreateProfileDialog({
                   {includeStarterGoal ? 'Quitar' : 'Agregar'}
                 </button>
               </div>
-              {includeStarterGoal && <GoalForm goal={starterGoal} error={starterGoalError} compact onChange={onStarterGoalChange} />}
+              {includeStarterGoal && <GoalForm goal={starterGoal} error={starterGoalError} compact asOfDate={asOfDate} onChange={onStarterGoalChange} />}
             </section>
           </div>
         ) : (
-          <div className="dialog-body">
+          <div className="dialog-body" role="tabpanel" id="profile-creation-panel" aria-labelledby="documents-profile-tab">
             <label className="drop-zone compact">
               <Upload size={28} />
               <span>{isImporting ? 'Analizando documentos...' : 'Subir documentos y crear perfil'}</span>
@@ -134,6 +177,7 @@ export function CreateProfileDialog({
           )}
         </footer>
       </section>
-    </div>
+    </div>,
+    document.body,
   )
 }

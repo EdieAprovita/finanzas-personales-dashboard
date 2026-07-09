@@ -6,14 +6,16 @@ export function GoalForm({
   goal,
   error,
   compact = false,
+  asOfDate,
   onChange,
 }: {
   goal: GoalFormState
   error?: string
   compact?: boolean
+  asOfDate: string
   onChange: (goal: GoalFormState) => void
 }) {
-  const estimate = goalFormEstimate(goal)
+  const estimate = goalFormEstimate(goal, asOfDate)
   const typeOptions: GoalType[] = ['emergency', 'savings', 'travel', 'small_purchase', 'large_purchase', 'home', 'vehicle', 'debt']
 
   function update(next: Partial<GoalFormState>) {

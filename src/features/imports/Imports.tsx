@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowDownToLine, CheckCircle2, FileText, Gauge, Plus, Upload } from 'lucide-react'
+import { AlertTriangle, ArrowDownToLine, CheckCircle2, FileText, Gauge, Upload } from 'lucide-react'
 import type { FinancialProfile, ImportedDocument } from '../../domain/types'
 import { documentKindLabels } from '../../lib/documentFieldSpecs'
 import { profileDisplayName } from '../profiles/profileSummary'
@@ -866,7 +866,7 @@ export function Imports({
         <div className="panel-heading">
           <div>
             <h2>Ingreso de documentos</h2>
-            <p>Sube lotes de CSV, PDF, XML o imagenes. El primer selector actualiza solo el perfil activo.</p>
+            <p>Sube CSV, PDF, XML o imágenes al perfil activo. Crea otro perfil desde “Nuevo” si necesitas separar escenarios.</p>
           </div>
           <ArrowDownToLine size={24} />
         </div>
@@ -875,12 +875,6 @@ export function Imports({
           <span>{isImporting ? 'Procesando localmente...' : `Agregar documentos a ${profileDisplayName(profile, [profile])}`}</span>
           <input type="file" multiple accept={documentImportAccept} onChange={(event) => onFiles(selectedFiles(event.target.files), 'current')} />
         </label>
-        <div className="import-actions">
-          <label className="ghost primary">
-            <Plus size={18} /> Crear perfil nuevo con documentos
-            <input type="file" multiple accept={documentImportAccept} onChange={(event) => onFiles(selectedFiles(event.target.files), 'new')} />
-          </label>
-        </div>
         {importQueue.length > 0 && (
           <div className="import-queue">
             {importQueue.map((fileName, index) => (

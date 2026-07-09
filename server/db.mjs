@@ -1,8 +1,9 @@
-import { mkdirSync } from 'node:fs'
+import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { knowledgeEntries, knowledgeSources } from './knowledge-seed.mjs'
+import { migrateProfile } from './profile-schema.mjs'
 
 export const dbPath = resolve(process.cwd(), process.env.FINANZAS_DB_PATH ?? 'data/finanzas-os.sqlite')
 mkdirSync(dirname(dbPath), { recursive: true })
@@ -63,6 +64,36 @@ database.exec(`
   CREATE INDEX IF NOT EXISTS idx_knowledge_domain ON knowledge_entries(domain);
   CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id, changed_at DESC);
 `)
+
+function backupAndMigrateLegacyProfiles() {
+  const rows = database.prepare('SELECT id, data_json FROM profiles').all()
+  const legacyProfiles = rows
+    .map((row) => ({ id: row.id, profile: JSON.parse(row.data_json) }))
+    .filter(({ profile }) => profile.schemaVersion !== 2 || profile.reportingCurrency !== 'MXN')
+  if (legacyProfiles.length === 0) return
+
+  const backupDirectory = resolve(dirname(dbPath), 'backups')
+  mkdirSync(backupDirectory, { recursive: true, mode: 0o700 })
+  const backupPath = resolve(backupDirectory, `finanzas-os-before-profile-v2-${Date.now()}.sqlite`)
+  const escapedBackupPath = backupPath.replace(/'/g, "''")
+  database.exec(`VACUUM INTO '${escapedBackupPath}'`)
+  chmodSync(backupPath, 0o600)
+
+  const update = database.prepare('UPDATE profiles SET name = ?, data_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+  database.exec('BEGIN')
+  try {
+    for (const { id, profile } of legacyProfiles) {
+      const migratedProfile = migrateProfile(profile)
+      update.run(migratedProfile.name, JSON.stringify(migratedProfile), id)
+    }
+    database.exec('COMMIT')
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+}
+
+backupAndMigrateLegacyProfiles()
 
 export function seedKnowledge() {
   const sourceInsert = database.prepare(`

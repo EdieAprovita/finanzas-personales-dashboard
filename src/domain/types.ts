@@ -12,6 +12,7 @@ export type TransactionType = 'income' | 'expense' | 'transfer' | 'debt_payment'
 export type GoalType = 'savings' | 'travel' | 'small_purchase' | 'large_purchase' | 'home' | 'vehicle' | 'emergency' | 'debt'
 export type GoalPriority = 'high' | 'medium' | 'low'
 export type Status = 'green' | 'yellow' | 'red'
+export const PROFILE_SCHEMA_VERSION = 2
 export type DocumentKind =
   | 'credit_card_statement'
   | 'payroll_cfdi'
@@ -41,15 +42,21 @@ export interface Transaction {
   isRecurring?: boolean
   isEssential?: boolean
   goalId?: string
+  debtId?: string
+  isManual?: boolean
 }
 
 export interface Debt {
   id: string
+  accountId?: string
   name: string
   balance: number
   apr: number
   minimumPayment: number
   creditLimit?: number
+  cutoffDate?: string
+  paymentToAvoidInterest?: number
+  currency?: 'MXN' | 'USD'
   dueDate: string
 }
 
@@ -105,6 +112,8 @@ export interface ImportedDocument {
 }
 
 export interface FinancialProfile {
+  schemaVersion: number
+  reportingCurrency: 'MXN'
   id: string
   name: string
   description: string

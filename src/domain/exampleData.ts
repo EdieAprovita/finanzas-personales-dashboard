@@ -1,4 +1,4 @@
-import type { FinancialProfile, MonthlySnapshot, Transaction } from './types'
+import { PROFILE_SCHEMA_VERSION, type FinancialProfile, type MonthlySnapshot, type Transaction } from './types'
 
 const categories = ['Vivienda', 'Supermercado', 'Transporte', 'Restaurantes', 'Salud', 'Viajes', 'Suscripciones']
 
@@ -68,7 +68,7 @@ function transactions(profileId: string, baseIncome: number, pressure = 0): Tran
   return rows
 }
 
-export const exampleProfiles: FinancialProfile[] = [
+const exampleProfileData = [
   {
     id: 'healthy_saver',
     name: 'Ahorro saludable',
@@ -173,4 +173,15 @@ export const exampleProfiles: FinancialProfile[] = [
     monthlySnapshots: snapshots(99000, 0.08),
     importedDocuments: [],
   },
-]
+] satisfies Omit<FinancialProfile, 'schemaVersion' | 'reportingCurrency'>[]
+
+export const exampleProfiles: FinancialProfile[] = exampleProfileData.map((profile) => ({
+  ...profile,
+  schemaVersion: PROFILE_SCHEMA_VERSION,
+  reportingCurrency: 'MXN',
+  debts: profile.debts.map((debt) => ({
+    ...debt,
+    accountId: debt.id.endsWith('-debt') ? debt.id.slice(0, -'-debt'.length) : undefined,
+    currency: 'MXN',
+  })),
+}))

@@ -1,8 +1,8 @@
 import {
-  AlertTriangle,
   BookOpen,
   ChartNoAxesCombined,
   Database,
+  Ellipsis,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -22,7 +22,7 @@ import { CreateProfileDialog, type CreateProfileMode } from '../profiles/CreateP
 import { ActiveProfileBar, EmptyProfilesState, ProfileSwitcher } from '../profiles/ProfileManagement'
 import { profileDisplayName, profileOptionLabel } from '../profiles/profileSummary'
 
-export type AppTab = 'profiles' | 'dashboard' | 'capture' | 'planning' | 'imports' | 'knowledge' | 'privacy'
+export type AppTab = 'profiles' | 'dashboard' | 'capture' | 'planning' | 'imports' | 'knowledge' | 'privacy' | 'more'
 
 export interface ProfileCreationState {
   isOpen: boolean
@@ -33,6 +33,7 @@ export interface ProfileCreationState {
   includeStarterGoal: boolean
   starterGoal: GoalFormState
   starterGoalError: string
+  asOfDate: string
   isImporting: boolean
   importQueue: string[]
   onModeChange: (mode: CreateProfileMode) => void
@@ -57,6 +58,7 @@ function ProfileCreationSlot({ creation }: { creation: ProfileCreationState }) {
       includeStarterGoal={creation.includeStarterGoal}
       starterGoal={creation.starterGoal}
       starterGoalError={creation.starterGoalError}
+      asOfDate={creation.asOfDate}
       isImporting={creation.isImporting}
       importQueue={creation.importQueue}
       onModeChange={creation.onModeChange}
@@ -71,23 +73,12 @@ function ProfileCreationSlot({ creation }: { creation: ProfileCreationState }) {
   )
 }
 
-function DataWarning() {
-  return (
-    <div className="data-warning">
-      <AlertTriangle size={18} />
-      <span>SQLite no esta conectado. Estas viendo datos del navegador; cambios y borrados no se sincronizan con la base local hasta iniciar la API.</span>
-    </div>
-  )
-}
-
 export function EmptyWorkspace({
-  apiStatus,
   profileMessage,
   creation,
   onCreateProfile,
   onRestoreExamples,
 }: {
-  apiStatus: 'sqlite' | 'indexeddb'
   profileMessage: string
   creation: ProfileCreationState
   onCreateProfile: () => void
@@ -144,8 +135,6 @@ export function EmptyWorkspace({
           </div>
         </header>
 
-        {apiStatus === 'indexeddb' && <DataWarning />}
-
         <EmptyProfilesState profileMessage={profileMessage} onCreate={onCreateProfile} onRestoreExamples={onRestoreExamples} />
         <ProfileCreationSlot creation={creation} />
       </section>
@@ -156,10 +145,13 @@ export function EmptyWorkspace({
 export function MainAppShell({
   activeTab,
   apiStatus,
+  apiMode,
   dbPath,
   profiles,
   currentProfile,
   metrics,
+  asOfDate,
+  reportingPeriod,
   creation,
   pendingDeleteProfileId,
   pendingDeleteAllProfiles,
@@ -180,13 +172,17 @@ export function MainAppShell({
   onReanalyzePersistedDocuments,
   onApplyReviewedDocumentMovements,
   onCreateGoalFromPlanning,
+  onReportingPeriodChange,
 }: {
   activeTab: AppTab
-  apiStatus: 'sqlite' | 'indexeddb'
+  apiStatus: 'sqlite'
+  apiMode: string
   dbPath: string
   profiles: FinancialProfile[]
   currentProfile: FinancialProfile
   metrics: FinancialMetrics
+  asOfDate: string
+  reportingPeriod: string
   creation: ProfileCreationState
   pendingDeleteProfileId: string
   pendingDeleteAllProfiles: boolean
@@ -207,6 +203,7 @@ export function MainAppShell({
   onReanalyzePersistedDocuments: () => void
   onApplyReviewedDocumentMovements: (documentId: string) => void
   onCreateGoalFromPlanning: () => void
+  onReportingPeriodChange: (period: string) => void
 }) {
   return (
     <main className="app-shell">
@@ -240,37 +237,33 @@ export function MainAppShell({
             <span className="tab-label-short">Estado</span>
             <span className="tab-label-full">Estado actual</span>
           </button>
-          <button className={activeTab === 'capture' ? 'active' : ''} onClick={() => onSwitchTab('capture')} aria-label="Captura">
+          <button className={activeTab === 'capture' ? 'active' : ''} onClick={() => onSwitchTab('capture')} aria-label="Movimientos">
             <Plus size={18} />
-            <span className="tab-label-short">Captura</span>
-            <span className="tab-label-full">Captura</span>
+            <span className="tab-label-short">Mov.</span>
+            <span className="tab-label-full">Movimientos</span>
           </button>
-          <button className={activeTab === 'planning' ? 'active' : ''} onClick={() => onSwitchTab('planning')} aria-label="Planeacion">
+          <button className={activeTab === 'planning' ? 'active' : ''} onClick={() => onSwitchTab('planning')} aria-label="Metas">
             <Target size={18} />
-            <span className="tab-label-short">Plan</span>
-            <span className="tab-label-full">Planeacion</span>
+            <span className="tab-label-short">Metas</span>
+            <span className="tab-label-full">Metas</span>
           </button>
           <button className={activeTab === 'imports' ? 'active' : ''} onClick={() => onSwitchTab('imports')} aria-label="Documentos">
             <Upload size={18} />
             <span className="tab-label-short">Docs</span>
             <span className="tab-label-full">Documentos</span>
           </button>
-          <button className={activeTab === 'knowledge' ? 'active' : ''} onClick={() => onSwitchTab('knowledge')} aria-label="Matriz">
-            <BookOpen size={18} />
-            <span className="tab-label-short">Matriz</span>
-            <span className="tab-label-full">Matriz</span>
-          </button>
-          <button className={activeTab === 'privacy' ? 'active' : ''} onClick={() => onSwitchTab('privacy')} aria-label="Privacidad">
-            <ShieldCheck size={18} />
-            <span className="tab-label-short">Priv.</span>
-            <span className="tab-label-full">Privacidad</span>
+          <button className={['more', 'knowledge', 'privacy'].includes(activeTab) ? 'active' : ''} onClick={() => onSwitchTab('more')} aria-label="Más">
+            <Ellipsis size={18} />
+            <span className="tab-label-short">Más</span>
+            <span className="tab-label-full">Más</span>
           </button>
         </nav>
 
         <div className="stack-card compact">
           <span>Modo de datos</span>
-          <strong>{apiStatus === 'sqlite' ? 'SQLite local conectado' : 'Fallback IndexedDB activo'}</strong>
+          <strong>SQLite local conectado</strong>
           {apiStatus === 'sqlite' && dbPath && <small>{dbPath.split('/').at(-1)}</small>}
+          {apiMode === 'sqlite-local-lan' && <small>Modo LAN activo: usa solo los orígenes permitidos.</small>}
         </div>
       </aside>
 
@@ -326,18 +319,18 @@ export function MainAppShell({
 
         <ProfileCreationSlot creation={creation} />
 
-        {apiStatus === 'indexeddb' && <DataWarning />}
-
         {activeTab === 'dashboard' && (
           <Dashboard
             profile={currentProfile}
             metrics={metrics}
+            reportingPeriod={reportingPeriod}
+            onReportingPeriodChange={onReportingPeriodChange}
             onStartCapture={() => onSwitchTab('capture')}
             onCreateFromDocuments={() => onSwitchTab('imports')}
             onOpenPlanning={() => onSwitchTab('planning')}
           />
         )}
-        {activeTab === 'capture' && <Capture profile={currentProfile} onChange={onUpdateProfile} />}
+        {activeTab === 'capture' && <Capture profile={currentProfile} asOfDate={asOfDate} onChange={onUpdateProfile} />}
         {activeTab === 'planning' && <Planning profile={currentProfile} metrics={metrics} onCreateGoal={onCreateGoalFromPlanning} />}
         {activeTab === 'imports' && (
           <Imports
@@ -349,6 +342,25 @@ export function MainAppShell({
             onReanalyzePersistedDocuments={onReanalyzePersistedDocuments}
             onApplyReviewedDocumentMovements={onApplyReviewedDocumentMovements}
           />
+        )}
+        {activeTab === 'more' && (
+          <section className="panel more-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Más herramientas</h2>
+                <p>Consulta conceptos financieros y revisa cómo se guardan tus datos locales.</p>
+              </div>
+              <Ellipsis size={22} />
+            </div>
+            <div className="empty-actions">
+              <button type="button" className="ghost" onClick={() => onSwitchTab('knowledge')}>
+                <BookOpen size={18} /> Matriz financiera
+              </button>
+              <button type="button" className="ghost" onClick={() => onSwitchTab('privacy')}>
+                <ShieldCheck size={18} /> Privacidad
+              </button>
+            </div>
+          </section>
         )}
         {activeTab === 'knowledge' && <KnowledgeMatrix />}
         {activeTab === 'privacy' && <PrivacyPanel />}
