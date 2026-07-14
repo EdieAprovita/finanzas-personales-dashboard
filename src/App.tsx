@@ -26,8 +26,6 @@ function App() {
   const [activeProfileId, setActiveProfileId] = useState('')
   const [profiles, setProfiles] = useState<FinancialProfile[]>([])
   const [apiStatus, setApiStatus] = useState<'checking' | 'sqlite' | 'blocked'>('checking')
-  const [apiMode, setApiMode] = useState('sqlite-local-file')
-  const [dbPath, setDbPath] = useState('')
   const [reportingPeriod, setReportingPeriod] = useState(asOfDate.slice(0, 7))
   const [importMessage, setImportMessage] = useState('')
   const [isImporting, setIsImporting] = useState(false)
@@ -46,9 +44,7 @@ function App() {
 
   const loadProfiles = useCallback(async (): Promise<void> => {
     try {
-      const health = await getApiHealth()
-      setDbPath(health.dbFile)
-      setApiMode(health.mode)
+      await getApiHealth()
       setApiStatus('sqlite')
       const apiProfiles = await getProfiles()
       if (apiProfiles.length === 0) {
@@ -67,7 +63,7 @@ function App() {
     } catch {
       setApiStatus('blocked')
     }
-  }, [asOfDate, setActiveProfileId, setApiMode, setApiStatus, setDbPath, setProfiles, setReportingPeriod])
+  }, [asOfDate, setActiveProfileId, setApiStatus, setProfiles, setReportingPeriod])
 
   const currentProfile = profiles.find((row) => row.id === activeProfileId) ?? profiles[0]
   const metrics = useMemo(
@@ -136,6 +132,7 @@ function App() {
       return
     }
     await persistProfile(original)
+    setProfileMessage('Datos de ejemplo restaurados para este espacio.')
     setImportMessage('Perfil restaurado con datos de ejemplo.')
   }
 
@@ -286,7 +283,9 @@ function App() {
       const result = applyReviewedStatementMovements(currentProfile, documentId)
       await persistProfile(recalculateLatestSnapshot(result.profile, asOfDate))
       const appliedRows = Number(result.document.extracted?.reviewedMovementRowsApplied ?? 0)
-      const message = `Movimientos revisados aplicados: ${appliedRows}. El nombre del documento se mantiene oculto.`
+      const message = result.document.kind === 'payroll_cfdi'
+        ? `Nomina revisada aplicada: ${appliedRows} ingreso(s). El nombre del documento se mantiene oculto.`
+        : `Movimientos revisados aplicados: ${appliedRows}. El nombre del documento se mantiene oculto.`
       setImportMessage(message)
       setProfileMessage(message)
       switchTab('imports')
@@ -418,7 +417,7 @@ function App() {
   }
 
   if (apiStatus === 'checking') {
-    return <main className="loading">Cargando datos locales...</main>
+    return <main className="loading">Cargando datos...</main>
   }
 
   if (apiStatus === 'blocked') {
@@ -426,8 +425,8 @@ function App() {
       <main className="loading blocked-storage">
         <section className="panel">
           <p className="eyebrow">Datos protegidos</p>
-          <h1>No se pudo abrir SQLite local</h1>
-          <p>La app no escribira una copia distinta de tus finanzas. Inicia la API local y vuelve a intentar.</p>
+          <h1>No se pudo abrir tu información financiera</h1>
+          <p>La app no escribira una copia distinta de tus finanzas. Revisa la conexión e intenta de nuevo.</p>
           <button type="button" className="action-button" onClick={() => void loadProfiles()}>
             Reintentar conexion
           </button>
@@ -454,9 +453,7 @@ function App() {
   return (
     <MainAppShell
       activeTab={activeTab}
-      apiStatus={apiStatus}
-      apiMode={apiMode}
-      dbPath={dbPath}
+      canResetProfile={exampleProfiles.some((profile) => profile.id === currentProfile.id)}
       profiles={profiles}
       currentProfile={currentProfile}
       metrics={metrics}

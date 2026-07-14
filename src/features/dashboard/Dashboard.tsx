@@ -170,9 +170,8 @@ export function Dashboard({
               </button>
             </div>
             <div className="empty-dashboard-proof" aria-label="Preparacion del dashboard">
-              <span>Perfil independiente</span>
-              <span>Sin datos mezclados</span>
-              <span>Listo para datos reales</span>
+              <span>Información organizada</span>
+              <span>Sin datos duplicados</span>
             </div>
           </div>
 

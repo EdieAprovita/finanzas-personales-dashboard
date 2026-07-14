@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('pdfjs-dist', () => ({
+  getDocument: vi.fn(),
+  GlobalWorkerOptions: {},
+}))
+
 import { calculateMetrics } from './finance'
+import { applyReviewedStatementMovements } from '../lib/importers'
 import { recalculateLatestSnapshot } from './snapshots'
 import type { FinancialProfile } from './types'
 
@@ -130,5 +137,36 @@ describe('recalculateLatestSnapshot', () => {
 
     expect(recalculated).toBe(original)
     expect(recalculated.monthlySnapshots).toHaveLength(1)
+  })
+})
+
+describe('applyReviewedStatementMovements', () => {
+  it('applies a reviewed payroll PDF only with a detected payment date and net income', () => {
+    const result = applyReviewedStatementMovements(
+      profile({
+        accounts: [],
+        importedDocuments: [
+          {
+            id: 'payroll-pdf',
+            fileName: 'nomina.pdf',
+            fileType: 'pdf',
+            importedAt: '2026-07-13T00:00:00.000Z',
+            status: 'needs_review',
+            summary: 'Nomina PDF revisada.',
+            extractedRows: 0,
+            kind: 'payroll_cfdi',
+            detectedInstitution: 'Empresa',
+            extracted: { paymentDate: '2026-06-15', netIncome: 12000 },
+          },
+        ],
+      }),
+      'payroll-pdf',
+    )
+
+    expect(result.profile.transactions).toMatchObject([
+      { date: '2026-06-15', amount: 12000, category: 'Nomina', type: 'income' },
+    ])
+    expect(result.document.status).toBe('processed')
+    expect(result.document.extracted?.reviewedMovementRowsApplied).toBe(1)
   })
 })

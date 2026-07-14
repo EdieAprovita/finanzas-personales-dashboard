@@ -15,7 +15,7 @@ export function PrivacyPanel() {
         <article>
           <ShieldCheck size={22} />
           <h3>Datos locales</h3>
-          <p>Datos guardados en SQLite local con fallback IndexedDB. La API escucha en esta computadora y Vite la expone como ruta local de desarrollo.</p>
+          <p>Tu información se guarda en este dispositivo. Los documentos se procesan aquí y no se suben por defecto.</p>
         </article>
         <article>
           <Trash2 size={22} />

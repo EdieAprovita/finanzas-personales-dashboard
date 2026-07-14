@@ -389,6 +389,7 @@ const extractedFieldPriority: Record<string, string[]> = {
     'paymentDate',
     'periodStart',
     'periodEnd',
+    'employerName',
     'netIncome',
     'totalPercepciones',
     'totalDeducciones',
@@ -588,6 +589,7 @@ const safePreviewFields = new Set([
   'depositRows',
   'depositsTotal',
   'documentSubtypeLabel',
+  'employerName',
   'expectedClosingBalance',
   'expectedFields',
   'feesAmount',
@@ -608,12 +610,14 @@ const safePreviewFields = new Set([
   'monthlyContribution',
   'netAmount',
   'netCashFlow',
+  'netIncome',
   'newCharges',
   'noInterestPayment',
   'nominalGatPercent',
   'openingBalance',
   'paidDays',
   'paymentsAmount',
+  'paymentDate',
   'payrollAccountDepositRows',
   'payrollAccountMixedFlow',
   'payrollAccountWithdrawalRows',
@@ -1155,7 +1159,13 @@ export function Imports({
                 cardMovementRows.length > 0 &&
                 doc.extracted?.cardReconciliationStatus === 'balanced' &&
                 !hasReviewedMovementApproval
-              const canApplyReviewedMovements = canApplyStatementMovements || canApplyCardMovements
+              const canApplyPayroll =
+                doc.kind === 'payroll_cfdi' &&
+                typeof doc.extracted?.paymentDate === 'string' &&
+                typeof doc.extracted?.netIncome === 'number' &&
+                doc.extracted.netIncome > 0 &&
+                !hasReviewedMovementApproval
+              const canApplyReviewedMovements = canApplyStatementMovements || canApplyCardMovements || canApplyPayroll
               return (
                 <article
                   key={doc.id}
@@ -1204,7 +1214,7 @@ export function Imports({
                     {canApplyReviewedMovements && (
                       <div className="document-approval-actions">
                         <button type="button" className="ghost primary" onClick={() => onApplyReviewedDocumentMovements(doc.id)}>
-                          <CheckCircle2 size={16} /> Aplicar movimientos revisados
+                          <CheckCircle2 size={16} /> {canApplyPayroll ? 'Aplicar nomina revisada' : 'Aplicar movimientos revisados'}
                         </button>
                       </div>
                     )}
@@ -1217,7 +1227,7 @@ export function Imports({
                     <ExtractedDetailTable title="Subcuentas detectadas para revisar" rows={subaccountRows} columns={subaccountColumns} />
                     {doc.warnings && doc.warnings.length > 0 && (
                       <ul className="document-warnings">
-                        {doc.warnings.map((warning) => (
+                        {[...new Set(doc.warnings)].map((warning) => (
                           <li key={warning}>{warning}</li>
                         ))}
                       </ul>

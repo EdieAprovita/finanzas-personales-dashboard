@@ -24,6 +24,41 @@ import { profileDisplayName, profileOptionLabel } from '../profiles/profileSumma
 
 export type AppTab = 'profiles' | 'dashboard' | 'capture' | 'planning' | 'imports' | 'knowledge' | 'privacy' | 'more'
 
+const sectionCopy: Record<AppTab, { title: string; description: string }> = {
+  profiles: {
+    title: 'Tus espacios financieros',
+    description: 'Elige lo que quieres revisar o crea un espacio nuevo para separar un objetivo.',
+  },
+  dashboard: {
+    title: 'Resumen financiero',
+    description: 'Revisa salud financiera, flujo, presupuesto y alertas del periodo.',
+  },
+  capture: {
+    title: 'Registrar actividad',
+    description: 'Agrega cuentas, movimientos e ingresos que quieras seguir.',
+  },
+  planning: {
+    title: 'Metas y plan',
+    description: 'Compara tus metas contra la capacidad de ahorro registrada.',
+  },
+  imports: {
+    title: 'Documentos',
+    description: 'Importa, revisa y aplica la información detectada de forma local.',
+  },
+  knowledge: {
+    title: 'Guía financiera',
+    description: 'Consulta los conceptos que aparecen en tus documentos financieros.',
+  },
+  privacy: {
+    title: 'Privacidad y datos',
+    description: 'Revisa cómo se almacenan y protegen tus datos en esta computadora.',
+  },
+  more: {
+    title: 'Más herramientas',
+    description: 'Accede a la guía financiera y a los controles de privacidad.',
+  },
+}
+
 export interface ProfileCreationState {
   isOpen: boolean
   mode: CreateProfileMode
@@ -93,7 +128,7 @@ export function EmptyWorkspace({
           </div>
           <div>
             <strong>Finanzas OS</strong>
-            <span>Private financial workspace</span>
+            <span>Finanzas personales</span>
           </div>
         </div>
       </div>
@@ -102,30 +137,14 @@ export function EmptyWorkspace({
         <header className="topbar empty-hero">
           <div>
             <p className="eyebrow">Dashboard financiero personal</p>
-            <h1>Empieza limpio, con datos por perfil</h1>
+            <h1>Empieza con tu información financiera</h1>
             <p>
-              Crea un workspace financiero para cada persona o escenario. Despues importa nomina, estados de cuenta, tarjetas y
-              metas para ver salud financiera, flujo y planeacion.
+              Crea un espacio para organizar tus cuentas, movimientos y metas. Puedes importar documentos cuando estés listo.
             </p>
             <div className="empty-hero-points" aria-label="Capacidades iniciales">
-              <span>Captura real</span>
-              <span>Importacion guiada</span>
-              <span>Metas por escenario</span>
-              <span>Dashboard por perfil</span>
-            </div>
-            <div className="empty-hero-stats" aria-label="Estado actual del workspace">
-              <article>
-                <strong>0</strong>
-                <span>perfiles activos</span>
-              </article>
-              <article>
-                <strong>0</strong>
-                <span>documentos mezclados</span>
-              </article>
-              <article>
-                <strong>Local</strong>
-                <span>base SQLite</span>
-              </article>
+              <span>Registra tus movimientos</span>
+              <span>Importa documentos</span>
+              <span>Planea una meta</span>
             </div>
           </div>
         </header>
@@ -139,9 +158,7 @@ export function EmptyWorkspace({
 
 export function MainAppShell({
   activeTab,
-  apiStatus,
-  apiMode,
-  dbPath,
+  canResetProfile,
   profiles,
   currentProfile,
   metrics,
@@ -170,9 +187,7 @@ export function MainAppShell({
   onReportingPeriodChange,
 }: {
   activeTab: AppTab
-  apiStatus: 'sqlite'
-  apiMode: string
-  dbPath: string
+  canResetProfile: boolean
   profiles: FinancialProfile[]
   currentProfile: FinancialProfile
   metrics: FinancialMetrics
@@ -200,6 +215,7 @@ export function MainAppShell({
   onCreateGoalFromPlanning: () => void
   onReportingPeriodChange: (period: string) => void
 }) {
+  const section = sectionCopy[activeTab]
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Navegacion principal">
@@ -209,7 +225,7 @@ export function MainAppShell({
           </div>
           <div>
             <strong>Finanzas OS</strong>
-            <span>Private financial workspace</span>
+            <span>Finanzas personales</span>
           </div>
         </div>
 
@@ -227,15 +243,15 @@ export function MainAppShell({
         )}
 
         <nav className="tabs">
-          <button className={activeTab === 'dashboard' ? 'active' : ''} onClick={() => onOpenDashboardForProfile()} aria-label="Estado actual">
+          <button className={activeTab === 'dashboard' ? 'active' : ''} onClick={() => onOpenDashboardForProfile()} aria-label="Resumen">
             <ChartNoAxesCombined size={18} />
-            <span className="tab-label-short">Estado</span>
-            <span className="tab-label-full">Estado actual</span>
+            <span className="tab-label-short">Resumen</span>
+            <span className="tab-label-full">Resumen</span>
           </button>
-          <button className={activeTab === 'capture' ? 'active' : ''} onClick={() => onSwitchTab('capture')} aria-label="Movimientos">
+          <button className={activeTab === 'capture' ? 'active' : ''} onClick={() => onSwitchTab('capture')} aria-label="Registrar">
             <Plus size={18} />
-            <span className="tab-label-short">Mov.</span>
-            <span className="tab-label-full">Movimientos</span>
+            <span className="tab-label-short">Registrar</span>
+            <span className="tab-label-full">Registrar</span>
           </button>
           <button className={activeTab === 'planning' ? 'active' : ''} onClick={() => onSwitchTab('planning')} aria-label="Metas">
             <Target size={18} />
@@ -254,37 +270,46 @@ export function MainAppShell({
           </button>
         </nav>
 
-        <div className="stack-card compact">
-          <span>Modo de datos</span>
-          <strong>SQLite local conectado</strong>
-          {apiStatus === 'sqlite' && dbPath && <small>{dbPath.split('/').at(-1)}</small>}
-          {apiMode === 'sqlite-local-lan' && <small>Modo LAN activo: usa solo los orígenes permitidos.</small>}
-        </div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Dashboard financiero personal</p>
-            <h1>{activeTab === 'profiles' ? 'Perfiles financieros' : profileDisplayName(currentProfile, profiles)}</h1>
-            <p>
-              {activeTab === 'profiles'
-                ? 'Administra tus perfiles, abre un dashboard especifico o limpia todos los datos locales.'
-                : currentProfile.description}
-            </p>
+            <p className="eyebrow">{activeTab === 'profiles' ? 'Organización financiera' : profileDisplayName(currentProfile, profiles)}</p>
+            <h1>{section.title}</h1>
+            <p>{section.description}</p>
           </div>
           <div className="topbar-actions">
-            <button type="button" className="ghost primary" onClick={() => onOpenCreateProfile('manual')}>
-              <Plus size={18} /> Nuevo perfil
-            </button>
-            <button type="button" className="ghost" onClick={onRestoreExamples}>
-              <Database size={18} /> Restaurar ejemplos
-            </button>
-            <button type="button" className="ghost danger" onClick={onResetProfile}>
-              <RefreshCw size={18} /> Reiniciar perfil
-            </button>
+            {activeTab === 'profiles' ? (
+              <>
+                <button type="button" className="ghost primary" onClick={() => onOpenCreateProfile('manual')}>
+                  <Plus size={18} /> Nuevo espacio
+                </button>
+                <button type="button" className="ghost" onClick={onRestoreExamples}>
+                  <Database size={18} /> Restaurar ejemplos
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" className="ghost primary" onClick={() => onSwitchTab('capture')}>
+                  <Plus size={18} /> Registrar
+                </button>
+                <button type="button" className="ghost" onClick={() => onSwitchTab('imports')}>
+                  <Upload size={18} /> Importar
+                </button>
+                {canResetProfile && (
+                  <button type="button" className="ghost" onClick={onResetProfile}>
+                    <RefreshCw size={18} /> Restaurar demo
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </header>
+
+        {activeTab !== 'profiles' && profileMessage === 'Datos de ejemplo restaurados para este espacio.' && (
+          <p className="workspace-message" aria-live="polite">{profileMessage}</p>
+        )}
 
         {activeTab === 'profiles' ? (
           <ProfileSwitcher
@@ -309,6 +334,8 @@ export function MainAppShell({
             onOpenDashboard={() => onOpenDashboardForProfile(currentProfile.id)}
             onBackToProfiles={() => onSwitchTab('profiles')}
             onCreate={() => onOpenCreateProfile('manual')}
+            canResetDemo={canResetProfile}
+            onResetDemo={onResetProfile}
           />
         )}
 

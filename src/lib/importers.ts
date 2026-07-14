@@ -284,8 +284,22 @@ function classifyDocument(file: File, text = '', preferredKind?: DocumentKind) {
     /inversion|investment|fondos?\s+(?:de\s+inversi[oó]n|gbm|externos)|cetes|bonddia|bondes|udibono|acciones|etf|portafolio|valor\s+de\s+mercado|valor\s+del\s+portafolio|smart\s+cash|gbm|casa\s+de\s+bolsa|trading\s+(mx|usa)|contrato\s+de\s+intermediacion|plan\s+personal\s+(?:para|de)\s+el\s+retiro|\bppr\b|\bafore\b|siefore|cuenta\s+individual|ahorro\s+voluntario|ahorro\s+para\s+el\s+retiro/.test(
       haystack,
     )
+  const hasPayrollSignals = /nomina|payroll|salario|percepcion|deduccion|sueldos/.test(haystack)
+  const hasStructuredPayrollSignals =
+    /recibo\s+(?:de\s+)?nomina|cfdi|comprobante|fecha\s+(?:de\s+)?pago|periodo\s+(?:de\s+)?pago|total\s+percepciones|total\s+deducciones|tipo\s+nomina|dias\s+pagados/.test(
+      haystack,
+    )
+  const hasPayrollFileName = /(?:^|[-_\s])(?:nomina|payroll)(?:[-_\s.]|$)/.test(normalizeForSearch(file.name))
+  const hasRetirementSignals = /\bafore\b|siefore|consar|plan\s+personal\s+(?:para|de)\s+el\s+retiro|\bppr\b|ahorro\s+(?:para\s+el\s+retiro|voluntario)/.test(
+    haystack,
+  )
+  const hasSavingsBankSignals = /cuenta\s+nu|cajita|sofipo|\bgat\b|ahorro\s+congelado/.test(haystack)
   const hasBankMovementSignals =
     /(depositos?|retiros?)/.test(haystack) && (preferredKind === 'bank_statement' || /(estado\s+de\s+cuenta|cuenta|saldo)/.test(haystack))
+  const hasBankStatementSignals =
+    hasSavingsBankSignals ||
+    /estado\s+de\s+cuenta.*n[oó]mina|cuenta\s+n[oó]mina/.test(haystack) ||
+    (/(dep[oó]sitos?|retiros?)/.test(haystack) && /(estado\s+de\s+cuenta|cuenta|saldo\s+(?:inicial|final|actual))/.test(haystack))
 
   if (preferredKind === 'credit_card_statement') {
     kind = 'credit_card_statement'
@@ -296,17 +310,16 @@ function classifyDocument(file: File, text = '', preferredKind?: DocumentKind) {
   } else if (hasCardSignals) {
     kind = 'credit_card_statement'
     reasons.push('senales de tarjeta de credito')
+  } else if (hasPayrollFileName || (hasPayrollSignals && hasStructuredPayrollSignals && !hasSavingsBankSignals)) {
+    kind = 'payroll_cfdi'
+    reasons.push('senales de nomina estructurada')
   } else if (hasInvestmentSignals) {
     kind = 'investment_statement'
     reasons.push('senales de inversion')
-  } else if (
-    /estado\s+de\s+cuenta.*n[oó]mina|cuenta\s+n[oó]mina/.test(haystack) ||
-    (/(dep[oó]sitos?|retiros?)/.test(haystack) &&
-      /(estado\s+de\s+cuenta|cuenta|saldo\s+(?:inicial|final|actual))/.test(haystack))
-  ) {
+  } else if (hasBankStatementSignals) {
     kind = 'bank_statement'
     reasons.push('senales de estado de cuenta con depositos y retiros')
-  } else if (/nomina|payroll|salario|percepcion|deduccion|sueldos/.test(haystack)) {
+  } else if (hasStructuredPayrollSignals || (hasPayrollSignals && !hasRetirementSignals)) {
     kind = 'payroll_cfdi'
     reasons.push('senales de nomina')
   } else if (/cfdi|factura|folio fiscal|uuid|timbre fiscal|subtotal|iva/.test(haystack)) {
@@ -355,6 +368,133 @@ function numberFromPatterns(text: string, patterns: RegExp[]) {
 
 function dateFromPatterns(text: string, patterns: RegExp[]) {
   return normalizeDate(firstMatch(text, patterns))
+}
+
+function dateCandidates(text: string) {
+  return [
+    ...new Set(
+      [...text.matchAll(/\b(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{1,2}\s+(?:de\s+)?[a-z]{3,10}\.?\s+(?:de\s+)?\d{2,4})\b/gi)]
+        .map((match) => normalizeDate(match[0] ?? ''))
+        .filter(Boolean),
+    ),
+  ]
+}
+
+function payrollMoneyCandidates(text: string) {
+  return [...text.matchAll(/\$\s*(?:-?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|-?\d+(?:\.\d{1,2})?)/g)]
+    .map((match) => parseMoney(match[0] ?? ''))
+    .filter((value) => Number.isFinite(value))
+}
+
+function payrollDateFacts(text: string, normalized: string) {
+  const paymentDate = dateFromPatterns(normalized, [
+    /fecha\s*(?:de\s*)?pago(?:\s*(?:de\s*)?nomina)?[^\d]{0,80}(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\s+(?:de\s+)?[a-z]+\s+(?:de\s+)?\d{2,4})/,
+    /fecha\s*(?:de\s*)?deposito[^\d]{0,80}(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\s+(?:de\s+)?[a-z]+\s+(?:de\s+)?\d{2,4})/,
+  ])
+  const periodStart = dateFromPatterns(normalized, [
+    /fecha\s*(?:de\s*)?(?:inicio|inicial)(?:\s*(?:de\s*)?pago)?[^\d]{0,80}(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\s+(?:de\s+)?[a-z]+\s+(?:de\s+)?\d{2,4})/,
+    /periodo(?:\s+de\s+pago)?\s*(?:del|de)?\s*(\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4})\s*(?:al|a|hasta|-)/,
+  ])
+  const periodEnd = dateFromPatterns(normalized, [
+    /fecha\s*(?:de\s*)?(?:fin|final|termino)(?:\s*(?:de\s*)?pago)?[^\d]{0,80}(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\s+(?:de\s+)?[a-z]+\s+(?:de\s+)?\d{2,4})/,
+    /periodo(?:\s+de\s+pago)?\s*(?:del|de)?\s*\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4}\s*(?:al|a|hasta|-)\s*(\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4})/,
+  ])
+  const tableFacts: Record<'paymentDate' | 'periodStart' | 'periodEnd', string> = {
+    paymentDate: '',
+    periodStart: '',
+    periodEnd: '',
+  }
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const labels = normalizeForSearch(lines[index] ?? '')
+    const orderedKeys = [
+      ...(labels.includes('fecha de pago') || labels.includes('fecha pago') || labels.includes('fechapago') ? ['paymentDate'] : []),
+      ...(labels.includes('fecha inicio') || labels.includes('fecha inicial') || labels.includes('fechainicio') || labels.includes('fechainicial') ? ['periodStart'] : []),
+      ...(labels.includes('fecha fin') || labels.includes('fecha final') || labels.includes('fecha termino') || labels.includes('fechafin') || labels.includes('fechafinal') || labels.includes('fechatermino') ? ['periodEnd'] : []),
+    ] as Array<keyof typeof tableFacts>
+    if (!orderedKeys.length) continue
+    const values = dateCandidates(lines.slice(index + 1, index + 4).join(' '))
+    orderedKeys.forEach((key, valueIndex) => {
+      if (values[valueIndex]) tableFacts[key] = values[valueIndex]
+    })
+  }
+
+  const resolved = {
+    paymentDate: tableFacts.paymentDate || paymentDate,
+    periodStart: tableFacts.periodStart || periodStart,
+    periodEnd: tableFacts.periodEnd || periodEnd,
+  }
+  return resolved.periodStart && resolved.periodEnd && resolved.periodStart > resolved.periodEnd
+    ? { ...resolved, periodStart: '', periodEnd: '' }
+    : resolved
+}
+
+function payrollEmployerCandidate(value: string) {
+  const candidate = value
+    .replace(/\s*(?:\||,|;)?\s*(?:r\.?\s*f\.?\s*c\.?|rfc)\b.*$/i, '')
+    .replace(/^comprobante\s+fiscal\s+digital\s+por\s+internet\s*/i, '')
+    .replace(/\s+fecha\s*[:-].*$/i, '')
+    .replace(/\s+\b(?:cuenta|clabe|dias\s+pagados|rfc)\b.*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const letters = (candidate.match(/[a-z]/gi) ?? []).length
+  const digits = (candidate.match(/\d/g) ?? []).length
+  if (candidate.length < 3 || letters < 3 || digits > letters) return ''
+  if (/\b(?:rfc|certificado|folio|uuid|sello\s+digital|cadena\s+original|serie)\b/i.test(candidate)) return ''
+  return candidate.slice(0, 100)
+}
+
+function payrollEmployerName(text: string) {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const employerLabel = /razon\s+social|nombre\s+(?:del\s+)?emisor|nombre\s+empresa|empleador|patron|empresa/
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? ''
+    if (!employerLabel.test(normalizeForSearch(line))) continue
+    const inline = payrollEmployerCandidate(line.split(/[:|]/).slice(1).join(' '))
+    if (inline) return inline
+    for (const candidateLine of lines.slice(index + 1, index + 3)) {
+      const candidate = payrollEmployerCandidate(candidateLine.split('|')[0] ?? '')
+      if (candidate) return candidate
+    }
+  }
+
+  for (const line of lines) {
+    const match = line.match(/^(.{3,100}?)\s+(?:r\.?\s*f\.?\s*c\.?|rfc)\b/i)
+    const candidate = payrollEmployerCandidate(match?.[1] ?? '')
+    if (candidate) return candidate
+  }
+  return ''
+}
+
+function payrollAmountFacts(text: string, normalized: string) {
+  const grossPay = moneyFromPatterns(normalized, [/total\s+percepciones[^\d-]*(-?[\d,.]+)/, /percepciones[^\d-]*(-?[\d,.]+)/])
+  const totalDeductions = moneyFromPatterns(normalized, [/total\s+deducciones[^\d-]*(-?[\d,.]+)/, /deducciones[^\d-]*(-?[\d,.]+)/])
+  const totalOtherPayments = moneyFromPatterns(normalized, [/total\s+otros\s+pagos[^\d-]*(-?[\d,.]+)/])
+  const netIncome = moneyFromPatterns(normalized, [
+    /(?:neto\s+(?:pagado|a\s+pagar)|(?:importe|total)\s+neto|neto\s+recibido|liquido\s+a\s+pagar|total\s+a\s+(?:recibir|pagar)|cantidad\s+a\s+pagar)[^\d-]*(-?[\d,.]+)/,
+    /total\s+(?:pagado|nomina)[^\d-]*(-?[\d,.]+)/,
+  ])
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const labels = normalizeForSearch(lines.slice(index, index + 2).join(' '))
+    if (!labels.includes('percepciones') || !labels.includes('deducciones') || !labels.includes('neto')) continue
+    const values = lines
+      .slice(index + 2, index + 6)
+      .map((line) => payrollMoneyCandidates(line))
+      .find((lineValues) => lineValues.length >= 3) ?? []
+    if (values.length < 3) continue
+    return {
+      grossPay: values[0] ?? grossPay,
+      totalDeductions: values.at(-2) ?? totalDeductions,
+      totalOtherPayments: values.length >= 4 ? values[1] ?? totalOtherPayments : totalOtherPayments,
+      netIncome: values.at(-1) ?? netIncome,
+    }
+  }
+
+  return { grossPay, totalDeductions, totalOtherPayments, netIncome }
 }
 
 function last4FromPatterns(text: string, patterns: RegExp[]) {
@@ -917,18 +1057,20 @@ function extractFinancialDocumentFacts(kind: DocumentKind, text: string): Extrac
   })
 
   if (kind === 'payroll_cfdi') {
+    const payrollDates = payrollDateFacts(text, normalized)
+    const payrollAmounts = payrollAmountFacts(text, normalized)
+    const derivedNetIncome =
+      payrollAmounts.grossPay !== undefined && payrollAmounts.totalDeductions !== undefined && payrollAmounts.grossPay >= 100 && payrollAmounts.grossPay > payrollAmounts.totalDeductions
+        ? Number((payrollAmounts.grossPay - payrollAmounts.totalDeductions + (payrollAmounts.totalOtherPayments ?? 0)).toFixed(2))
+        : undefined
     return cleanFacts({
       ...common,
-      paymentDate: dateFromPatterns(normalized, [
-        /fecha\s+(?:de\s+)?pago[^\d]*(\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4})/,
-        /fecha\s+(?:de\s+)?emisi[oó]n[^\d]*(\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4})/,
-      ]),
-      periodStart: dateFromPatterns(normalized, [/periodo\s+(?:del|de)?\s*(\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4})\s+(?:al|a)/]),
-      periodEnd: dateFromPatterns(normalized, [/periodo\s+(?:del|de)?\s*\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4}\s+(?:al|a)\s*(\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4})/]),
-      grossPay: moneyFromPatterns(normalized, [/total\s+percepciones[^\d-]*(-?[\d,.]+)/, /percepciones[^\d-]*(-?[\d,.]+)/]),
-      totalDeductions: moneyFromPatterns(normalized, [/total\s+deducciones[^\d-]*(-?[\d,.]+)/, /deducciones[^\d-]*(-?[\d,.]+)/]),
-      totalOtherPayments: moneyFromPatterns(normalized, [/total\s+otros\s+pagos[^\d-]*(-?[\d,.]+)/]),
-      netIncome: moneyFromPatterns(normalized, [/neto\s+(?:pagado|a\s+pagar)[^\d-]*(-?[\d,.]+)/, /total\s+(?:pagado|nomina)[^\d-]*(-?[\d,.]+)/]),
+      ...payrollDates,
+      employerName: payrollEmployerName(text),
+      grossPay: payrollAmounts.grossPay,
+      totalDeductions: payrollAmounts.totalDeductions,
+      totalOtherPayments: payrollAmounts.totalOtherPayments,
+      netIncome: payrollAmounts.netIncome ?? derivedNetIncome,
       isrDetected: /\bisr\b|impuesto\s+sobre\s+la\s+renta/.test(normalized),
       imssDetected: /\bimss\b|seguro\s+social/.test(normalized),
       infonavitDetected: /infonavit|credito\s+vivienda/.test(normalized),
@@ -1492,6 +1634,7 @@ function shouldRunSupplementalPdfOcr(kind: DocumentKind, text: string, facts: Ex
   if (kind === 'credit_card_statement') return !facts.cardMovementRowCount && text.length < 900
   if (kind === 'bank_statement') return !facts.statementMovementRowCount && text.length < 900
   if (kind === 'investment_statement') return !facts.positionRows && !facts.subaccountRows && text.length < 900
+  if (kind === 'payroll_cfdi') return !facts.paymentDate || !facts.netIncome || !facts.periodStart || !facts.periodEnd
   return false
 }
 
@@ -2107,49 +2250,33 @@ function deriveMonthlySnapshots(profile: FinancialProfile): FinancialProfile {
 }
 
 function mergeDocument(profile: FinancialProfile, document: ImportedDocument) {
-  const existing =
-    profile.importedDocuments.find((row) => row.id === document.id) ??
+  const existingByFingerprint = document.documentFingerprint
+    ? profile.importedDocuments.find((row) => row.documentFingerprint === document.documentFingerprint)
+    : undefined
+  if (existingByFingerprint) {
+    const nextDocument = {
+      ...document,
+      id: existingByFingerprint.id,
+      warnings: [
+        ...(document.warnings ?? []),
+        'Documento reimportado con contenido ya conocido; se conserva el identificador anterior para evitar duplicados.',
+      ],
+    }
+    return profile.importedDocuments.map((row) => (row.id === existingByFingerprint.id ? nextDocument : row))
+  }
+
+  const hasIdCollision = profile.importedDocuments.some((row) => row.id === document.id)
+  if (!hasIdCollision) return [document, ...profile.importedDocuments]
+  const fingerprintSuffix = document.documentFingerprint?.split(':').at(-1)?.slice(0, 10) ?? 'nuevo'
+  return [{ ...document, id: `${document.id}-${fingerprintSuffix}` }, ...profile.importedDocuments]
+}
+
+function canonicalImportedDocument(profile: FinancialProfile, document: ImportedDocument) {
+  return (
     (document.documentFingerprint
       ? profile.importedDocuments.find((row) => row.documentFingerprint === document.documentFingerprint)
-      : undefined)
-  if (!existing) return [document, ...profile.importedDocuments]
-  const matchedByFingerprint = existing.id !== document.id
-  const stableDocument = matchedByFingerprint
-    ? {
-        ...document,
-        id: existing.id,
-        warnings: [
-          ...(document.warnings ?? []),
-          'Documento reimportado con contenido ya conocido; se conserva el identificador anterior para evitar duplicados.',
-        ],
-      }
-    : document
-
-  const approvalKeys = [
-    'appliedRows',
-    'skippedDuplicateRows',
-    'skippedSemanticDuplicates',
-    'matchedTransactionIds',
-    'reviewedMovementRowsApplied',
-    'reviewedMovementRowsAppliedAt',
-    'reviewedMovementRowsApproval',
-  ]
-  const preservedApproval = existing.extracted?.reviewedMovementRowsAppliedAt
-    ? Object.fromEntries(approvalKeys.map((key) => [key, existing.extracted?.[key]]).filter(([, value]) => value !== undefined))
-    : {}
-  const nextDocument = existing.extracted?.reviewedMovementRowsAppliedAt
-    ? {
-        ...stableDocument,
-        status: 'processed' as const,
-        sourceTransactionIds: existing.sourceTransactionIds?.length ? existing.sourceTransactionIds : stableDocument.sourceTransactionIds,
-        extracted: {
-          ...stableDocument.extracted,
-          ...preservedApproval,
-        },
-        warnings: [...(stableDocument.warnings ?? []), 'Aprobacion manual previa conservada al reimportar el mismo documento.'],
-      }
-    : stableDocument
-  return profile.importedDocuments.map((row) => (row.id === existing.id ? nextDocument : row))
+      : undefined) ?? profile.importedDocuments.find((row) => row.id === document.id) ?? document
+  )
 }
 
 function documentExtractedNumber(document: ImportedDocument, key: string) {
@@ -2222,38 +2349,58 @@ function transactionFromCardMovement(document: ImportedDocument, accountId: stri
   }
 }
 
+function transactionFromPayrollPdf(document: ImportedDocument, accountId: string): Transaction | null {
+  const date = normalizeDate(documentExtractedString(document, 'paymentDate'))
+  const amount = documentExtractedNumber(document, 'netIncome')
+  if (!date || amount <= 0) return null
+  return {
+    id: `tx-reviewed-payroll-${document.id}-${date}-${Math.round(amount * 100)}`,
+    date,
+    amount,
+    merchant: document.detectedInstitution ? `Nomina ${document.detectedInstitution}` : 'Nomina importada',
+    category: 'Nomina',
+    accountId,
+    type: 'income',
+    isEssential: false,
+  }
+}
+
 export function applyReviewedStatementMovements(profile: FinancialProfile, documentId: string): ApplyReviewedMovementsResult {
   const document = profile.importedDocuments.find((row) => row.id === documentId)
   if (!document) throw new Error('No se encontro el documento para aplicar movimientos.')
-  if (document.kind !== 'bank_statement' && document.kind !== 'credit_card_statement') {
-    throw new Error('Solo se pueden aplicar movimientos revisados de estados bancarios o tarjetas conciliadas.')
+  if (!['bank_statement', 'credit_card_statement', 'payroll_cfdi'].includes(document.kind ?? 'unknown')) {
+    throw new Error('Solo se pueden aplicar estados bancarios, tarjetas conciliadas o nominas con fecha e ingreso neto detectados.')
   }
   if (document.extracted?.reviewedMovementRowsAppliedAt) throw new Error('Este documento ya tenia movimientos revisados aplicados.')
   const isCreditCardStatement = document.kind === 'credit_card_statement'
+  const isPayrollPdf = document.kind === 'payroll_cfdi'
   if (isCreditCardStatement && document.extracted?.cardReconciliationStatus !== 'balanced') {
     throw new Error('Solo se pueden aplicar movimientos de tarjeta cuando la conciliacion de saldos esta balanceada.')
   }
   const rows = isCreditCardStatement ? cardMovementRows(document) : statementMovementRows(document)
-  if (!rows.length) throw new Error('El documento no tiene movimientos visibles para aplicar.')
+  if (!isPayrollPdf && !rows.length) throw new Error('El documento no tiene movimientos visibles para aplicar.')
 
-  const accountType = isCreditCardStatement ? 'credit_card' : reviewedStatementAccountType(document)
+  const accountType = isCreditCardStatement ? 'credit_card' : isPayrollPdf ? 'checking' : reviewedStatementAccountType(document)
   const institution = document.detectedInstitution ?? document.fileName
   const accountId = documentExtractedString(document, 'accountId') || `account-${slug(institution)}-${accountType}`
   const { accounts } = getOrCreateAccount(profile, {
     id: accountId,
-    name: document.detectedInstitution ? `${document.detectedInstitution} cuenta` : `Cuenta ${document.fileName}`,
+    name: isPayrollPdf ? 'Cuenta nomina importada' : document.detectedInstitution ? `${document.detectedInstitution} cuenta` : `Cuenta ${document.fileName}`,
     type: accountType,
     balance: 0,
     currency: 'MXN',
     creditLimit: isCreditCardStatement ? documentExtractedNumber(document, 'creditLimit') || undefined : undefined,
   })
-  const transactions = rows
-    .map((row, index) =>
-      isCreditCardStatement
-        ? transactionFromCardMovement(document, accountId, row, index)
-        : transactionFromStatementMovement(document, accountId, accountType, row, index),
-    )
-    .filter((tx): tx is Transaction => Boolean(tx))
+  const transactions = isPayrollPdf
+    ? [transactionFromPayrollPdf(document, accountId)].filter((tx): tx is Transaction => Boolean(tx))
+    : rows
+        .map((row, index) =>
+          isCreditCardStatement
+            ? transactionFromCardMovement(document, accountId, row, index)
+            : transactionFromStatementMovement(document, accountId, accountType, row, index),
+        )
+        .filter((tx): tx is Transaction => Boolean(tx))
+  if (!transactions.length) throw new Error('La nomina requiere fecha de pago e ingreso neto detectados antes de aplicarla.')
   const transactionMerge = mergeTransactions({ ...profile, accounts }, transactions)
   const lastRowBalance = [...rows].reverse().find((row) => typeof row.balance === 'number')?.balance
   const cardDebtBalance =
@@ -2295,7 +2442,7 @@ export function applyReviewedStatementMovements(profile: FinancialProfile, docum
       skippedDuplicateRows: transactionMerge.skippedDuplicateIds.length,
       skippedSemanticDuplicates: transactionMerge.skippedSemanticDuplicates,
       matchedTransactionIds: transactionMerge.matchedTransactionIds,
-      reviewedMovementRowsApplied: rows.length,
+      reviewedMovementRowsApplied: isPayrollPdf ? transactions.length : rows.length,
       reviewedMovementRowsAppliedAt: new Date().toISOString(),
       reviewedMovementRowsApproval: 'manual_user_action',
     },
@@ -2303,7 +2450,7 @@ export function applyReviewedStatementMovements(profile: FinancialProfile, docum
     warnings: [
       ...(document.warnings ?? []),
       transactionMerge.addedTransactions.length
-        ? `${transactionMerge.addedTransactions.length} movimiento(s) de ${isCreditCardStatement ? 'tarjeta' : 'PDF'} aplicados tras revision manual.`
+        ? `${transactionMerge.addedTransactions.length} movimiento(s) de ${isPayrollPdf ? 'nomina PDF' : isCreditCardStatement ? 'tarjeta' : 'PDF'} aplicados tras revision manual.`
         : 'No se aplicaron movimientos nuevos; las filas revisadas ya estaban duplicadas o incompletas.',
     ],
   }
@@ -2330,7 +2477,7 @@ export async function importFinancialFiles(profile: FinancialProfile, files: Fil
     try {
       const result = await importFinancialFile(nextProfile, file)
       nextProfile = result.profile
-      documents.push(result.document)
+      documents.push(canonicalImportedDocument(nextProfile, result.document))
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'No se pudo procesar el archivo.'
       const document = rejectedDocument(file, reason)
@@ -2338,7 +2485,7 @@ export async function importFinancialFiles(profile: FinancialProfile, files: Fil
         ...nextProfile,
         importedDocuments: mergeDocument(nextProfile, document),
       }
-      documents.push(document)
+      documents.push(canonicalImportedDocument(nextProfile, document))
     }
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
