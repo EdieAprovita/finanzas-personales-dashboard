@@ -1781,6 +1781,76 @@
   min-height: 260px;
 }
 
+.chart-lg {
+  height: 340px;
+  min-height: 340px;
+}
+
+.finance-chart-toolbar,
+.budget-filter,
+.document-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -2px 0 14px;
+}
+
+.finance-chart-toolbar {
+  justify-content: space-between;
+}
+
+.finance-chart-toolbar > div,
+.budget-filter,
+.document-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.finance-chart-toolbar button,
+.budget-filter button,
+.document-filter button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.finance-chart-toolbar button.active,
+.budget-filter button.active,
+.document-filter button.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.budget-filter button.red {
+  border-color: #fdba74;
+  color: #9a3412;
+}
+
+.budget-filter button.yellow {
+  border-color: #fde68a;
+  color: #a16207;
+}
+
+.finance-chart-toolbar p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.finance-chart-toolbar p strong {
+  color: var(--text);
+}
+
 .goal-list,
 .document-list,
 .privacy-grid {

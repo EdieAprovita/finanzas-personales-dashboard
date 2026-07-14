@@ -96,11 +96,6 @@ export function EmptyWorkspace({
             <span>Private financial workspace</span>
           </div>
         </div>
-        <div className="empty-brand-meta">
-          <span>SQLite local</span>
-          <span>Perfiles independientes</span>
-          <span>Listo para datos reales</span>
-        </div>
       </div>
 
       <section className="workspace empty-workspace">

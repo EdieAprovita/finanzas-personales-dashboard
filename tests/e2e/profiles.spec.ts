@@ -146,6 +146,20 @@ test('opens the selected profile dashboard from profile management', async ({ pa
   await expect(page.locator('.kpi', { hasText: 'Score Finanzas OS' })).toBeVisible()
 })
 
+test('switches the financial history range from dashboard controls', async ({ page }) => {
+  const profileCard = page.locator('.profile-card', { hasText: 'Ahorro saludable' })
+  await profileCard.getByRole('button', { name: /Abrir dashboard/i }).click()
+
+  const rangeControls = page.getByRole('group', { name: 'Rango del historial financiero' })
+  const recent = rangeControls.getByRole('button', { name: 'Ultimos 6 meses' })
+  const allHistory = rangeControls.getByRole('button', { name: 'Todo el historial' })
+  await expect(recent).toHaveAttribute('aria-pressed', 'true')
+  await allHistory.click()
+  await expect(allHistory).toHaveAttribute('aria-pressed', 'true')
+  await expect(recent).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByText(/Proyeccion descriptiva:/i)).toBeVisible()
+})
+
 test('deletes all profiles quickly with a two-step confirmation and restores examples', async ({ page }) => {
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toBeVisible()
   await page.locator('.profile-card', { hasText: 'Ahorro saludable' }).getByRole('button', { name: /Abrir dashboard/i }).click()

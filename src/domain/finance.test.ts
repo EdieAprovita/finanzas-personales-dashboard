@@ -82,6 +82,45 @@ describe('calculateMetrics', () => {
 
     expect(result.goalMonthlyCapacity).toBe(0)
   })
+
+  it('shows budget categories without spending and flags overspending', () => {
+    const result = calculateMetrics(
+      profile({
+        budgets: [
+          { category: 'Comida', monthlyLimit: 1000 },
+          { category: 'Salud', monthlyLimit: 500 },
+        ],
+        transactions: [{ id: 'food', date: '2026-06-04', amount: -1200, merchant: 'Mercado', category: 'Comida', accountId: 'cash', type: 'expense' }],
+      }),
+      { period: '2026-06', asOfDate: '2026-07-09' },
+    )
+
+    expect(result.budgetProgress).toMatchObject([
+      { category: 'Comida', amount: 1200, budget: 1000, remaining: -200, status: 'red' },
+      { category: 'Salud', amount: 0, budget: 500, remaining: 500, status: 'green' },
+    ])
+  })
+
+  it('projects cash flow from the last three available reporting months', () => {
+    const result = calculateMetrics(
+      profile({
+        monthlySnapshots: [
+          { month: '2026-04', income: 10000, expenses: 6000, debtPayments: 500, savings: 3500, netWorth: 10000 },
+          { month: '2026-05', income: 12000, expenses: 7000, debtPayments: 500, savings: 4500, netWorth: 14500 },
+          { month: '2026-06', income: 11000, expenses: 6500, debtPayments: 500, savings: 4000, netWorth: 18500 },
+        ],
+      }),
+      { period: '2026-06', asOfDate: '2026-07-09' },
+    )
+
+    expect(result.cashFlowForecast).toEqual({
+      monthsAnalyzed: 3,
+      projectedIncome: 11000,
+      projectedExpenses: 6500,
+      projectedDebtPayments: 500,
+      projectedCashFlow: 4000,
+    })
+  })
 })
 
 describe('recalculateLatestSnapshot', () => {

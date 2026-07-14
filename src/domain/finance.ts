@@ -29,7 +29,26 @@ export interface FinancialMetrics {
   scoreBreakdown: Record<'cashFlow' | 'runway' | 'debt' | 'savings' | 'netWorthTrend' | 'goals' | 'budget', number>
   kpis: Kpi[]
   categorySpend: { category: string; amount: number; budget: number }[]
+  budgetProgress: BudgetProgress[]
+  cashFlowForecast: CashFlowForecast
   goalReadiness: GoalReadiness[]
+}
+
+export interface BudgetProgress {
+  category: string
+  amount: number
+  budget: number
+  remaining: number
+  utilizationRatio: number | null
+  status: Status
+}
+
+export interface CashFlowForecast {
+  monthsAnalyzed: number
+  projectedIncome: number
+  projectedExpenses: number
+  projectedDebtPayments: number
+  projectedCashFlow: number
 }
 
 export interface FinancialMetricContext {
@@ -243,16 +262,49 @@ export function calculateMetrics(profile: FinancialProfile, context: FinancialMe
   if (cashFlow < 0) financialHealthScore = Math.min(financialHealthScore, 59)
   if (!hasFinancialInputs) financialHealthScore = 0
 
-  const categorySpend = profile.transactions
-    .filter((tx) => tx.type === 'expense' && tx.date.startsWith(period))
-    .reduce<{ category: string; amount: number; budget: number }[]>((rows, tx) => {
-      const found = rows.find((row) => row.category === tx.category)
-      const budget = profile.budgets.find((row) => row.category === tx.category)?.monthlyLimit ?? 0
-      if (found) found.amount += Math.abs(tx.amount)
-      else rows.push({ category: tx.category, amount: Math.abs(tx.amount), budget })
-      return rows
-    }, [])
-    .sort((a, b) => b.amount - a.amount)
+  const budgetByCategory = new Map(profile.budgets.map((budget) => [budget.category, budget.monthlyLimit]))
+  const spendByCategory = new Map<string, number>()
+  for (const transaction of profile.transactions) {
+    if (transaction.type !== 'expense' || !transaction.date.startsWith(period)) continue
+    spendByCategory.set(transaction.category, (spendByCategory.get(transaction.category) ?? 0) + Math.abs(transaction.amount))
+  }
+  const categorySpend = [...new Set([...budgetByCategory.keys(), ...spendByCategory.keys()])]
+    .map((category) => ({
+      category,
+      amount: spendByCategory.get(category) ?? 0,
+      budget: budgetByCategory.get(category) ?? 0,
+    }))
+    .sort((left, right) => right.amount - left.amount || left.category.localeCompare(right.category))
+  const budgetProgress = categorySpend
+    .filter((row) => row.budget > 0 || row.amount > 0)
+    .map((row) => {
+      const utilizationRatio = row.budget > 0 ? row.amount / row.budget : null
+      return {
+        ...row,
+        remaining: row.budget - row.amount,
+        utilizationRatio,
+        status: utilizationRatio === null ? 'yellow' : statusBy(utilizationRatio, (value) => value <= 0.8, (value) => value <= 1),
+      } satisfies BudgetProgress
+    })
+    .sort((left, right) => (right.utilizationRatio ?? 0) - (left.utilizationRatio ?? 0) || right.amount - left.amount)
+  const forecastRows = snapshotsThroughPeriod.slice(-3)
+  const cashFlowForecast = forecastRows.length
+    ? {
+        monthsAnalyzed: forecastRows.length,
+        projectedIncome: forecastRows.reduce((sum, row) => sum + row.income, 0) / forecastRows.length,
+        projectedExpenses: forecastRows.reduce((sum, row) => sum + row.expenses, 0) / forecastRows.length,
+        projectedDebtPayments: forecastRows.reduce((sum, row) => sum + row.debtPayments, 0) / forecastRows.length,
+        projectedCashFlow: 0,
+      }
+    : {
+        monthsAnalyzed: 0,
+        projectedIncome: 0,
+        projectedExpenses: 0,
+        projectedDebtPayments: 0,
+        projectedCashFlow: 0,
+      }
+  cashFlowForecast.projectedCashFlow =
+    cashFlowForecast.projectedIncome - cashFlowForecast.projectedExpenses - cashFlowForecast.projectedDebtPayments
 
   const kpis: Kpi[] = [
     {
@@ -303,6 +355,8 @@ export function calculateMetrics(profile: FinancialProfile, context: FinancialMe
     scoreBreakdown,
     kpis,
     categorySpend,
+    budgetProgress,
+    cashFlowForecast,
     goalReadiness,
   }
 }
