@@ -37,6 +37,7 @@ export function GoalForm({
               type="button"
               className={`goal-type-chip ${goal.type === type ? 'active' : ''}`}
               key={type}
+              aria-pressed={goal.type === type}
               onClick={() => update({ type })}
             >
               <Icon size={17} />

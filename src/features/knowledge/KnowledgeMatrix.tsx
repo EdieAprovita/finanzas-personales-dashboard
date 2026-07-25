@@ -121,6 +121,7 @@ export function KnowledgeMatrix() {
                   type="button"
                   key={section.key}
                   className={activeSection === section.key ? 'active' : ''}
+                  aria-pressed={activeSection === section.key}
                   onClick={() => runSearch(query, section.key)}
                   data-testid="knowledge-section-tab"
                   data-section-key={section.key}
@@ -166,7 +167,7 @@ export function KnowledgeMatrix() {
             <Search size={18} /> Detectar conceptos
           </button>
         </div>
-        <p className="import-message">{status}</p>
+        <p className="import-message" role="status" aria-live="polite">{status}</p>
       </section>
 
       {matches.length > 0 && (

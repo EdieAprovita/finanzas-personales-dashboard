@@ -889,7 +889,7 @@ export function Imports({
         <label className="drop-zone">
           <Upload size={28} />
           <span>{isImporting ? 'Procesando localmente...' : `Agregar documentos a ${profileDisplayName(profile, [profile])}`}</span>
-          <input type="file" multiple accept={documentImportAccept} onChange={(event) => onFiles(selectedFiles(event.target.files), 'current')} />
+          <input className="file-input" type="file" multiple accept={documentImportAccept} onChange={(event) => onFiles(selectedFiles(event.target.files), 'current')} />
         </label>
         {importQueue.length > 0 && (
           <div className="import-queue">
@@ -898,7 +898,7 @@ export function Imports({
             ))}
           </div>
         )}
-        {importMessage && <p className="import-message">{importMessage}</p>}
+        {importMessage && <p className="import-message" role="status" aria-live="polite">{importMessage}</p>}
       </section>
 
       <section className="panel document-quality-panel">

@@ -47,7 +47,7 @@ interface ChartSize {
   height: number
 }
 
-function ChartFrame({ className, children }: { className: string; children: (size: ChartSize) => ReactNode }) {
+function ChartFrame({ className, label, children }: { className: string; label: string; children: (size: ChartSize) => ReactNode }) {
   const frameRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState<ChartSize>({ width: 0, height: 0 })
 
@@ -70,7 +70,7 @@ function ChartFrame({ className, children }: { className: string; children: (siz
   }, [])
 
   return (
-    <div className={className} ref={frameRef}>
+    <div className={className} ref={frameRef} role="img" aria-label={label}>
       {size.width > 0 && size.height > 0 ? children(size) : null}
     </div>
   )
@@ -387,6 +387,16 @@ export function Dashboard({
             {upcomingDueDebts.length > 0 && `Revisa fecha límite de ${upcomingDueDebts.map((debt) => debt.name).join(', ')}. `}
             {constrainedGoals.length > 0 && `${constrainedGoals.length} meta(s) exceden la capacidad registrada.`}
           </span>
+          {documentQuality.risk.pendingReconciliation > 0 && (
+            <button type="button" className="ghost" onClick={onCreateFromDocuments}>
+              Revisar documentos
+            </button>
+          )}
+          {constrainedGoals.length > 0 && (
+            <button type="button" className="ghost" onClick={onOpenPlanning}>
+              Revisar metas
+            </button>
+          )}
         </section>
       )}
       <section className="kpi-grid">
@@ -503,7 +513,7 @@ export function Dashboard({
             </p>
           )}
         </div>
-        <ChartFrame className="chart-lg">
+        <ChartFrame className="chart-lg" label="Historial de ingreso, gasto, flujo y patrimonio">
           {({ width, height }) => (
               <ComposedChart width={width} height={height} data={historyData} margin={{ top: 8, right: 10, left: 0, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -521,6 +531,15 @@ export function Dashboard({
               </ComposedChart>
           )}
         </ChartFrame>
+        <details className="chart-data-summary">
+          <summary>Ver datos del historial financiero</summary>
+          <table>
+            <thead><tr><th>Mes</th><th>Ingreso</th><th>Gasto</th><th>Flujo</th><th>Patrimonio</th></tr></thead>
+            <tbody>
+              {historyData.map((row) => <tr key={row.month}><td>{row.month}</td><td>{mxn(row.income)}</td><td>{mxn(row.expenses)}</td><td>{mxn(row.cashFlow)}</td><td>{mxn(row.netWorth)}</td></tr>)}
+            </tbody>
+          </table>
+        </details>
       </section>
 
       <section className="panel">
@@ -542,7 +561,7 @@ export function Dashboard({
             ))}
           </div>
         )}
-        <ChartFrame className="chart-md">
+        <ChartFrame className="chart-md" label="Gasto y presupuesto por categoría">
           {({ width, height }) => (
               <BarChart width={width} height={height} data={budgetChartData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -554,6 +573,15 @@ export function Dashboard({
               </BarChart>
           )}
         </ChartFrame>
+        <details className="chart-data-summary">
+          <summary>Ver datos de gasto por categoría</summary>
+          <table>
+            <thead><tr><th>Categoría</th><th>Gasto</th><th>Presupuesto</th></tr></thead>
+            <tbody>
+              {budgetChartData.map((row) => <tr key={row.category}><td>{row.category}</td><td>{mxn(row.amount)}</td><td>{mxn(row.budget)}</td></tr>)}
+            </tbody>
+          </table>
+        </details>
       </section>
 
       <section className="panel">
@@ -563,7 +591,7 @@ export function Dashboard({
             <p>Lectura rapida del mes actual.</p>
           </div>
         </div>
-        <ChartFrame className="chart-md">
+        <ChartFrame className="chart-md" label="Distribución del gasto por categoría">
           {({ width, height }) => (
               <PieChart width={width} height={height}>
                 <Pie
@@ -585,6 +613,15 @@ export function Dashboard({
               </PieChart>
           )}
         </ChartFrame>
+        <details className="chart-data-summary">
+          <summary>Ver distribución del gasto</summary>
+          <table>
+            <thead><tr><th>Categoría</th><th>Gasto</th></tr></thead>
+            <tbody>
+              {metrics.categorySpend.map((row) => <tr key={row.category}><td>{row.category}</td><td>{mxn(row.amount)}</td></tr>)}
+            </tbody>
+          </table>
+        </details>
       </section>
     </div>
   )
