@@ -347,10 +347,17 @@ test('creates a manual profile and captures an account plus movement', async ({ 
   await expect(accountPanel.getByLabel('Nombre')).toBeEmpty()
 
   const movementPanel = page.locator('.capture-card').filter({ has: page.getByRole('heading', { name: 'Registrar movimiento' }) })
+  await movementPanel.getByLabel('Cuenta').selectOption({ label: 'E2E Cuenta Nomina' })
   await movementPanel.getByLabel('Monto').fill('1200')
   await movementPanel.getByLabel('Comercio / origen').fill('E2E Supermercado')
   await movementPanel.getByLabel('Categoría').fill('Supermercado')
   await movementPanel.getByRole('button', { name: /Guardar movimiento/i }).click()
+
+  const recentData = page.locator('.recent-ledger')
+  await recentData.getByRole('button', { name: 'Eliminar E2E Supermercado' }).click()
+  await expect(page.getByText('Vuelve a tocar eliminar para confirmar que deseas borrar E2E Supermercado.')).toBeVisible()
+  await recentData.getByRole('button', { name: 'Confirmar eliminar E2E Supermercado' }).click()
+  await expect(recentData.getByText('E2E Supermercado')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Resumen' }).click()
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('E2E Perfil captura')

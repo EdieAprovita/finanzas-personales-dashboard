@@ -103,13 +103,13 @@ export function CreateProfileDialog({
           </button>
         </header>
 
-        <div className="creation-options" role="tablist" aria-label="Metodo de creacion">
-          <button type="button" role="tab" id="manual-profile-tab" aria-selected={mode === 'manual'} aria-controls="profile-creation-panel" className={`creation-option ${mode === 'manual' ? 'active' : ''}`} onClick={() => onModeChange('manual')}>
+        <div className="creation-options" aria-label="Metodo de creacion">
+          <button type="button" aria-pressed={mode === 'manual'} className={`creation-option ${mode === 'manual' ? 'active' : ''}`} onClick={() => onModeChange('manual')}>
             <PencilLine size={20} />
             <strong>Manual</strong>
             <span>Nombre, descripcion y captura desde cero.</span>
           </button>
-          <button type="button" role="tab" id="documents-profile-tab" aria-selected={mode === 'documents'} aria-controls="profile-creation-panel" className={`creation-option ${mode === 'documents' ? 'active' : ''}`} onClick={() => onModeChange('documents')}>
+          <button type="button" aria-pressed={mode === 'documents'} className={`creation-option ${mode === 'documents' ? 'active' : ''}`} onClick={() => onModeChange('documents')}>
             <ReceiptText size={20} />
             <strong>Con documentos</strong>
             <span>PDF, CSV, XML o imagen para poblar el perfil.</span>
@@ -117,7 +117,7 @@ export function CreateProfileDialog({
         </div>
 
         {mode === 'manual' ? (
-          <div className="dialog-body" role="tabpanel" id="profile-creation-panel" aria-labelledby="manual-profile-tab">
+          <div className="dialog-body">
             <label>
               Nombre del perfil
               <input value={name} onChange={(event) => onNameChange(event.target.value)} placeholder={`Mi plan financiero ${profileCount + 1}`} />
@@ -149,12 +149,12 @@ export function CreateProfileDialog({
             </section>
           </div>
         ) : (
-          <div className="dialog-body" role="tabpanel" id="profile-creation-panel" aria-labelledby="documents-profile-tab">
+          <div className="dialog-body">
             <label className="drop-zone compact">
               <Upload size={28} />
               <span>{isImporting ? 'Analizando documentos...' : 'Subir documentos y crear perfil'}</span>
               <small>Clasifico nomina, tarjetas, bancos, inversiones, facturas, tickets y recibos escaneados.</small>
-              <input type="file" multiple accept={documentImportAccept} onChange={(event) => onFiles(selectedFiles(event.target.files))} />
+              <input className="file-input" type="file" multiple accept={documentImportAccept} onChange={(event) => onFiles(selectedFiles(event.target.files))} />
             </label>
             {importQueue.length > 0 && (
               <div className="import-queue">

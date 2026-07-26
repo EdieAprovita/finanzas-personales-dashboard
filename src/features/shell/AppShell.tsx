@@ -243,27 +243,27 @@ export function MainAppShell({
         )}
 
         <nav className="tabs">
-          <button className={activeTab === 'dashboard' ? 'active' : ''} onClick={() => onOpenDashboardForProfile()} aria-label="Resumen">
+          <button className={activeTab === 'dashboard' ? 'active' : ''} onClick={() => onOpenDashboardForProfile()} aria-current={activeTab === 'dashboard' ? 'page' : undefined} aria-label="Resumen">
             <ChartNoAxesCombined size={18} />
             <span className="tab-label-short">Resumen</span>
             <span className="tab-label-full">Resumen</span>
           </button>
-          <button className={activeTab === 'capture' ? 'active' : ''} onClick={() => onSwitchTab('capture')} aria-label="Registrar">
+          <button className={activeTab === 'capture' ? 'active' : ''} onClick={() => onSwitchTab('capture')} aria-current={activeTab === 'capture' ? 'page' : undefined} aria-label="Registrar">
             <Plus size={18} />
             <span className="tab-label-short">Registrar</span>
             <span className="tab-label-full">Registrar</span>
           </button>
-          <button className={activeTab === 'planning' ? 'active' : ''} onClick={() => onSwitchTab('planning')} aria-label="Metas">
+          <button className={activeTab === 'planning' ? 'active' : ''} onClick={() => onSwitchTab('planning')} aria-current={activeTab === 'planning' ? 'page' : undefined} aria-label="Metas">
             <Target size={18} />
             <span className="tab-label-short">Metas</span>
             <span className="tab-label-full">Metas</span>
           </button>
-          <button className={activeTab === 'imports' ? 'active' : ''} onClick={() => onSwitchTab('imports')} aria-label="Documentos">
+          <button className={activeTab === 'imports' ? 'active' : ''} onClick={() => onSwitchTab('imports')} aria-current={activeTab === 'imports' ? 'page' : undefined} aria-label="Documentos">
             <Upload size={18} />
             <span className="tab-label-short">Docs</span>
             <span className="tab-label-full">Documentos</span>
           </button>
-          <button className={['more', 'knowledge', 'privacy'].includes(activeTab) ? 'active' : ''} onClick={() => onSwitchTab('more')} aria-label="Más">
+          <button className={['more', 'knowledge', 'privacy'].includes(activeTab) ? 'active' : ''} onClick={() => onSwitchTab('more')} aria-current={['more', 'knowledge', 'privacy'].includes(activeTab) ? 'page' : undefined} aria-label="Más">
             <Ellipsis size={18} />
             <span className="tab-label-short">Más</span>
             <span className="tab-label-full">Más</span>

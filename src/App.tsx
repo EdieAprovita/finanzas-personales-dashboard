@@ -202,7 +202,7 @@ function App() {
     setProfileMessage(
       firstGoal
         ? `${name} creado con la meta ${firstGoal.name}. Revisa si la aportacion mensual alcanza.`
-        : `${name} creado. Empieza capturando una cuenta, un movimiento o una meta.`,
+        : `${name} creado. Empieza agregando tu cuenta base para que el dashboard tenga un saldo inicial.`,
     )
     setImportMessage('')
   }
@@ -480,7 +480,7 @@ function App() {
       onApplyReviewedDocumentMovements={(documentId) => void handleApplyReviewedDocumentMovements(documentId)}
       onCreateGoalFromPlanning={() => {
         switchTab('capture')
-        setProfileMessage('Crea una meta y despues regresa a Planeacion para revisar su factibilidad.')
+        setProfileMessage('Crea una meta y después regresa a Planeación para revisar su factibilidad.')
       }}
       onReportingPeriodChange={setReportingPeriod}
     />

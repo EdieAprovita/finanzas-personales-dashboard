@@ -1782,6 +1782,32 @@
   min-height: 340px;
 }
 
+.chart-data-summary {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chart-data-summary summary {
+  cursor: pointer;
+  color: var(--blue);
+  font-weight: 800;
+}
+
+.chart-data-summary table {
+  width: 100%;
+  margin-top: 10px;
+  border-collapse: collapse;
+  color: var(--text);
+  text-align: left;
+}
+
+.chart-data-summary th,
+.chart-data-summary td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
 .finance-chart-toolbar,
 .budget-filter,
 .document-filter {
@@ -2234,8 +2260,21 @@
   cursor: pointer;
 }
 
-.drop-zone input {
-  display: none;
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.drop-zone:focus-within {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 3px;
 }
 
 .import-actions {
