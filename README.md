@@ -24,7 +24,7 @@ npm run lint
 
 ## CI/CD
 
-- **CI** corre en cada rama, pull request y ejecucion manual: formato Git, lint, pruebas unitarias, matriz de conocimiento, corpus documental sintetico, build y E2E aislado en Chromium para movil y escritorio.
+- **CI** corre en cada rama, pull request y ejecución manual: formato Git, lint, pruebas unitarias, matriz de conocimiento, corpus documental sintético, build y E2E aislado en Chromium para móvil y escritorio.
 - **Delivery candidate** corre en `main` y publica un artefacto inmutable con `dist`, `server`, `public`, manifiestos npm y checksum SHA-256. Es el paquete validado para un entorno de despliegue.
 - Un tag `v*` crea una GitHub Release con el mismo paquete y checksum. Los documentos reales, `test:imports:real`, la base SQLite local y benchmarks no se ejecutan en GitHub Actions.
 
