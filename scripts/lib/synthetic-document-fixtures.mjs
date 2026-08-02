@@ -22,6 +22,7 @@ export function generateSyntheticDocumentFixtures() {
   const cetesInvestmentPdfPath = join(dir, 'estado-cuenta-cetesdirecto-demo.pdf')
   const pprRetirementPdfPath = join(dir, 'estado-cuenta-ppr-demo.pdf')
   const aforeRetirementPdfPath = join(dir, 'estado-cuenta-afore-demo.pdf')
+  const payrollPdfPath = join(dir, 'recibo-nomina-demo.pdf')
   const receiptPath = join(dir, 'recibo-demo.png')
 
   writeFileSync(
@@ -111,6 +112,7 @@ gbm_pdf_path = r'''${gbmInvestmentPdfPath}'''
 cetes_pdf_path = r'''${cetesInvestmentPdfPath}'''
 ppr_pdf_path = r'''${pprRetirementPdfPath}'''
 afore_pdf_path = r'''${aforeRetirementPdfPath}'''
+payroll_pdf_path = r'''${payrollPdfPath}'''
 png_path = r'''${receiptPath}'''
 c = canvas.Canvas(pdf_path, pagesize=(612, 792))
 c.setFont("Helvetica", 14)
@@ -284,6 +286,25 @@ afore.setFont("Helvetica", 9)
 afore.drawString(72, 150, "SUBCUENTA: RCV | saldo: $430000.00 | aportaciones: $18500.00 | retiros: $0.00 | rendimiento: $5100.00")
 afore.drawString(72, 120, "SUBCUENTA: Ahorro voluntario | saldo: $35000.00 | aportaciones: $35000.00 | retiros: $4000.00 | rendimiento: $1200.00")
 afore.save()
+payroll = canvas.Canvas(payroll_pdf_path, pagesize=(612, 792))
+payroll.setFont("Helvetica", 14)
+payroll.drawString(72, 720, "RECIBO DE NOMINA CFDI")
+payroll.setFont("Helvetica", 11)
+payroll.drawString(72, 680, "FECHA PAGO     FECHA INICIO     PERIODICIDAD DE PAGO")
+payroll.drawString(72, 660, "15/06/2026      01/06/2026       QUINCENAL")
+payroll.drawString(72, 630, "PERIODO DE PAGO     FECHA TERMINO")
+payroll.drawString(72, 610, "15                   15/06/2026")
+payroll.drawString(72, 580, "RAZON SOCIAL")
+payroll.drawString(72, 560, "EMPRESA DEMO SERVICIOS SA DE CV | CUENTA | CLABE")
+payroll.drawString(72, 540, "RFC: EDS010101ABC")
+payroll.drawString(72, 510, "TOTAL | OTROS | TOTAL | TOTAL")
+payroll.drawString(72, 490, "PERCEPCIONES | PAGOS | DEDUCCIONES | NETO")
+payroll.drawString(72, 470, "$48,000.00 | $200.00 | $6,200.00 | $42,000.00")
+payroll.drawString(72, 440, "Emisor: 00001000000701027957")
+payroll.drawString(72, 420, "ISR retenido: $6,000.00")
+payroll.drawString(72, 400, "IMSS: $200.00")
+payroll.drawString(72, 380, "Aportacion de inversion: $0.00")
+payroll.save()
 img = Image.new("RGB", (760, 420), "white")
 draw = ImageDraw.Draw(img)
 font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 36)
@@ -315,6 +336,7 @@ img.save(png_path)
     cetesInvestmentPdfPath,
     pprRetirementPdfPath,
     aforeRetirementPdfPath,
+    payrollPdfPath,
     receiptPath,
   }
 }

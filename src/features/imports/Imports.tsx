@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react'
 import { AlertTriangle, ArrowDownToLine, CheckCircle2, FileText, Gauge, Upload } from 'lucide-react'
 import type { FinancialProfile, ImportedDocument } from '../../domain/types'
 import { documentKindLabels } from '../../lib/documentFieldSpecs'
@@ -393,6 +394,7 @@ const extractedFieldPriority: Record<string, string[]> = {
     'paymentDate',
     'periodStart',
     'periodEnd',
+    'employerName',
     'netIncome',
     'totalPercepciones',
     'totalDeducciones',
@@ -599,6 +601,7 @@ const safePreviewFields = new Set([
   'depositRows',
   'depositsTotal',
   'documentSubtypeLabel',
+  'employerName',
   'expectedClosingBalance',
   'expectedFields',
   'feesAmount',
@@ -619,12 +622,14 @@ const safePreviewFields = new Set([
   'monthlyContribution',
   'netAmount',
   'netCashFlow',
+  'netIncome',
   'newCharges',
   'noInterestPayment',
   'nominalGatPercent',
   'openingBalance',
   'paidDays',
   'paymentsAmount',
+  'paymentDate',
   'payrollAccountDepositRows',
   'payrollAccountMixedFlow',
   'payrollAccountWithdrawalRows',
@@ -866,7 +871,18 @@ export function Imports({
   onReanalyzePersistedDocuments: () => void
   onApplyReviewedDocumentMovements: (documentId: string) => void
 }) {
+  const [documentFilter, setDocumentFilter] = useState<'all' | 'needs_review' | 'processed' | 'rejected'>('all')
   const quality = analyzeDocumentQuality(profile)
+  const visibleDocuments = useMemo(
+    () =>
+      profile.importedDocuments
+        .filter((document) => documentFilter === 'all' || document.status === documentFilter)
+        .sort((left, right) => {
+          const statusPriority = { needs_review: 0, rejected: 1, processed: 2 }
+          return statusPriority[left.status] - statusPriority[right.status] || right.importedAt.localeCompare(left.importedAt)
+        }),
+    [documentFilter, profile.importedDocuments],
+  )
 
   function selectedFiles(fileList: FileList | null) {
     return Array.from(fileList ?? [])
@@ -885,7 +901,7 @@ export function Imports({
         <label className="drop-zone">
           <Upload size={28} />
           <span>{isImporting ? 'Procesando localmente...' : `Agregar documentos a ${profileDisplayName(profile, [profile])}`}</span>
-          <input type="file" multiple accept={documentImportAccept} onChange={(event) => onFiles(selectedFiles(event.target.files), 'current')} />
+          <input className="file-input" type="file" multiple accept={documentImportAccept} onChange={(event) => onFiles(selectedFiles(event.target.files), 'current')} />
         </label>
         {importQueue.length > 0 && (
           <div className="import-queue">
@@ -894,7 +910,7 @@ export function Imports({
             ))}
           </div>
         )}
-        {importMessage && <p className="import-message">{importMessage}</p>}
+        {importMessage && <p className="import-message" role="status" aria-live="polite">{importMessage}</p>}
       </section>
 
       <section className="panel document-quality-panel">
@@ -1120,11 +1136,27 @@ export function Imports({
             <p>Vista protegida: nombres de archivo, conceptos y texto libre permanecen ocultos por defecto.</p>
           </div>
         </div>
+        {profile.importedDocuments.length > 0 && (
+          <div className="document-filter" role="group" aria-label="Filtrar documentos por estado">
+            {[
+              ['all', `Todos (${profile.importedDocuments.length})`],
+              ['needs_review', `Revisar (${quality.review})`],
+              ['processed', `Listos (${quality.processed})`],
+              ['rejected', `Rechazados (${quality.rejected})`],
+            ].map(([filter, label]) => (
+              <button type="button" key={filter} className={documentFilter === filter ? 'active' : ''} aria-pressed={documentFilter === filter} onClick={() => setDocumentFilter(filter as 'all' | 'needs_review' | 'processed' | 'rejected')}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="document-list">
           {profile.importedDocuments.length === 0 ? (
             <p className="empty">Aun no hay documentos importados en este perfil.</p>
+          ) : visibleDocuments.length === 0 ? (
+            <p className="empty">No hay documentos en este estado.</p>
           ) : (
-            profile.importedDocuments.map((doc, index) => {
+            visibleDocuments.map((doc, index) => {
               const extractedEntries = extractedPreviewEntries(doc)
               const qualitySummary = documentQualitySummary(doc)
               const statementMovementRows = extractedObjectRows(doc, 'statementMovementRows')
@@ -1144,7 +1176,13 @@ export function Imports({
                 doc.extracted?.cardReconciliationStatus === 'balanced' &&
                 !hasReviewedMovementApproval
               const canApplyInvestmentPositions = doc.kind === 'investment_statement' && (positionRows.length > 0 || subaccountRows.length > 0) && !hasReviewedMovementApproval
-              const canApplyReviewedMovements = canApplyStatementMovements || canApplyCardMovements || canApplyInvestmentPositions
+              const canApplyPayroll =
+                doc.kind === 'payroll_cfdi' &&
+                typeof doc.extracted?.paymentDate === 'string' &&
+                typeof doc.extracted?.netIncome === 'number' &&
+                doc.extracted.netIncome > 0 &&
+                !hasReviewedMovementApproval
+              const canApplyReviewedMovements = canApplyStatementMovements || canApplyCardMovements || canApplyInvestmentPositions || canApplyPayroll
               return (
                 <article
                   key={doc.id}
@@ -1193,7 +1231,7 @@ export function Imports({
                     {canApplyReviewedMovements && (
                       <div className="document-approval-actions">
                         <button type="button" className="ghost primary" onClick={() => onApplyReviewedDocumentMovements(doc.id)}>
-                          <CheckCircle2 size={16} /> {canApplyInvestmentPositions ? 'Aplicar posiciones revisadas' : 'Aplicar movimientos revisados'}
+                          <CheckCircle2 size={16} /> {canApplyInvestmentPositions ? 'Aplicar posiciones revisadas' : canApplyPayroll ? 'Aplicar nomina revisada' : 'Aplicar movimientos revisados'}
                         </button>
                       </div>
                     )}
@@ -1208,7 +1246,7 @@ export function Imports({
                     <ExtractedDetailTable title="Subcuentas detectadas para revisar" rows={subaccountRows} columns={subaccountColumns} />
                     {doc.warnings && doc.warnings.length > 0 && (
                       <ul className="document-warnings">
-                        {doc.warnings.map((warning) => (
+                        {[...new Set(doc.warnings)].map((warning) => (
                           <li key={warning}>{warning}</li>
                         ))}
                       </ul>

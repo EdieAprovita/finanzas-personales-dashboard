@@ -36,9 +36,9 @@ async function resetProfilesToExamples(page: Page) {
 }
 
 async function expectNoProfilesOrDashboard(page: Page) {
-  await expect(page.getByRole('heading', { name: 'Empieza limpio, con datos por perfil' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Configura tu primer perfil financiero' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Crear perfil real' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Empieza con tu información financiera' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Crea tu primer espacio financiero' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Crear espacio' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Restaurar ejemplos' })).toBeVisible()
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toHaveCount(0)
   await expect(page.locator('[aria-label="Perfil activo"]')).toHaveCount(0)
@@ -85,12 +85,12 @@ async function createCleanProfileForImports(page: Page, name: string) {
   await page.getByRole('button', { name: 'Borrar todos los perfiles' }).click()
   await page.getByRole('button', { name: 'Confirmar borrar todos los perfiles' }).click()
   await expectNoProfilesOrDashboard(page)
-  await page.getByRole('button', { name: 'Crear perfil real' }).click()
+  await page.getByRole('button', { name: 'Crear espacio' }).click()
   const dialog = page.getByRole('dialog', { name: /Crear perfil financiero/i })
   await dialog.getByLabel('Nombre del perfil').fill(name)
   await dialog.getByRole('button', { name: /Crear y capturar datos/i }).click()
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText(name)
-  await page.getByRole('button', { name: 'Documentos' }).click()
+  await page.locator('nav').getByRole('button', { name: 'Documentos' }).click()
 }
 
 function payrollCfdiXml(total: number, paymentDate: string) {
@@ -121,12 +121,12 @@ test.beforeEach(async ({ page }) => {
 test('opens a profile dashboard as a distinct view', async ({ page }) => {
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Borrar todos los perfiles' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Perfiles financieros' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Tus espacios financieros' })).toBeVisible()
   await expect(page.locator('.profile-picker')).toHaveCount(0)
   await expect(page.getByLabel('Perfil activo para revisar')).toHaveCount(0)
 
   const profileCard = page.locator('.profile-card', { hasText: 'Ahorro saludable' })
-  await profileCard.getByRole('button', { name: /Abrir dashboard/i }).click()
+  await profileCard.getByRole('button', { name: /Abrir resumen/i }).click()
 
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toHaveCount(0)
   await expect(page.locator('[aria-label="Perfil activo"]')).toBeVisible()
@@ -139,16 +139,55 @@ test('opens a profile dashboard as a distinct view', async ({ page }) => {
 test('opens the selected profile dashboard from profile management', async ({ page }) => {
   const profileCard = page.locator('.profile-card', { hasText: 'Metas grandes' })
   await expect(profileCard).toBeVisible()
-  await profileCard.getByRole('button', { name: /Abrir dashboard/i }).click()
+  await profileCard.getByRole('button', { name: /Abrir resumen/i }).click()
 
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toHaveCount(0)
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('Metas grandes')
   await expect(page.locator('.kpi', { hasText: 'Score Finanzas OS' })).toBeVisible()
 })
 
+test('restores an example only from its dashboard and confirms the result', async ({ page }) => {
+  const modifiedExample = {
+    ...exampleProfiles[0],
+    description: 'Descripción modificada para probar restauración.',
+    accounts: [],
+    transactions: [],
+  }
+  const updateResponse = await page.request.put(`/api/profiles/${encodeURIComponent(modifiedExample.id)}`, { data: modifiedExample })
+  expect(updateResponse.ok()).toBe(true)
+  await page.goto('/')
+
+  const profileCard = page.locator('.profile-card', { hasText: 'Ahorro saludable' })
+  await profileCard.getByRole('button', { name: /Abrir resumen/i }).click()
+  const activeProfile = page.locator('[aria-label="Perfil activo"]')
+  await expect(activeProfile.getByRole('button', { name: 'Restaurar demo' })).toBeVisible()
+  await activeProfile.getByRole('button', { name: 'Restaurar demo' }).click()
+  await expect(page.getByText('Datos de ejemplo restaurados para este espacio.')).toBeVisible()
+
+  const profilesResponse = await page.request.get('/api/profiles')
+  const body = (await profilesResponse.json()) as { profiles: FinancialProfile[] }
+  const restored = body.profiles.find((profile) => profile.id === exampleProfiles[0].id)
+  expect(restored?.accounts).toEqual(exampleProfiles[0].accounts)
+  expect(restored?.transactions).toEqual(exampleProfiles[0].transactions)
+})
+
+test('switches the financial history range from dashboard controls', async ({ page }) => {
+  const profileCard = page.locator('.profile-card', { hasText: 'Ahorro saludable' })
+  await profileCard.getByRole('button', { name: /Abrir resumen/i }).click()
+
+  const rangeControls = page.getByRole('group', { name: 'Rango del historial financiero' })
+  const recent = rangeControls.getByRole('button', { name: 'Ultimos 6 meses' })
+  const allHistory = rangeControls.getByRole('button', { name: 'Todo el historial' })
+  await expect(recent).toHaveAttribute('aria-pressed', 'true')
+  await allHistory.click()
+  await expect(allHistory).toHaveAttribute('aria-pressed', 'true')
+  await expect(recent).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByText(/Proyeccion descriptiva:/i)).toBeVisible()
+})
+
 test('deletes all profiles quickly with a two-step confirmation and restores examples', async ({ page }) => {
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toBeVisible()
-  await page.locator('.profile-card', { hasText: 'Ahorro saludable' }).getByRole('button', { name: /Abrir dashboard/i }).click()
+  await page.locator('.profile-card', { hasText: 'Ahorro saludable' }).getByRole('button', { name: /Abrir resumen/i }).click()
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('Ahorro saludable')
   await page.getByRole('button', { name: 'Ver perfiles' }).click()
 
@@ -160,7 +199,7 @@ test('deletes all profiles quickly with a two-step confirmation and restores exa
   await expectNoProfilesOrDashboard(page)
   await page.reload()
   await expectNoProfilesOrDashboard(page)
-  await expect(page.getByRole('button', { name: 'Crear perfil real' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Crear espacio' })).toBeVisible()
 
   await restoreExamples(page)
   await expect(page.getByText(/Perfiles de ejemplo restaurados/i)).toBeVisible()
@@ -181,7 +220,7 @@ test('blocks the workspace instead of rehydrating IndexedDB when SQLite is unava
   })
 
   await page.reload()
-  await expect(page.getByRole('heading', { name: 'No se pudo abrir SQLite local' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'No se pudo abrir tu información financiera' })).toBeVisible()
   await expect(page.getByText('Ahorro saludable')).toHaveCount(0)
 })
 
@@ -213,7 +252,7 @@ test('rejects malformed, oversized, and non-local API requests', async ({ page }
 })
 
 test('creates a profile and deletes it individually with confirmation', async ({ page }) => {
-  await page.getByRole('button', { name: /Nuevo perfil/i }).first().click()
+  await page.getByRole('button', { name: /Nuevo espacio/i }).first().click()
   const dialog = page.getByRole('dialog', { name: /Crear perfil financiero/i })
   await dialog.getByLabel('Nombre del perfil').fill('E2E Perfil borrable')
   await dialog.getByLabel('Descripcion', { exact: true }).fill('Perfil sintetico para validar borrado individual.')
@@ -237,9 +276,9 @@ test('creates a profile and deletes it individually with confirmation', async ({
 test('deletes the last profile individually and shows the empty state', async ({ page }) => {
   await page.getByRole('button', { name: 'Borrar todos los perfiles' }).click()
   await page.getByRole('button', { name: 'Confirmar borrar todos los perfiles' }).click()
-  await expect(page.getByRole('heading', { name: 'Empieza limpio, con datos por perfil' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Empieza con tu información financiera' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Crear perfil real' }).click()
+  await page.getByRole('button', { name: 'Crear espacio' }).click()
   const dialog = page.getByRole('dialog', { name: /Crear perfil financiero/i })
   await dialog.getByLabel('Nombre del perfil').fill('E2E Perfil unico')
   await dialog.getByRole('button', { name: /Crear y capturar datos/i }).click()
@@ -264,7 +303,7 @@ test('shows and navigates the empty desktop dashboard for a real profile', async
   await page.getByRole('button', { name: 'Confirmar borrar todos los perfiles' }).click()
   await expectNoProfilesOrDashboard(page)
 
-  await page.getByRole('button', { name: 'Crear perfil real' }).click()
+  await page.getByRole('button', { name: 'Crear espacio' }).click()
   const dialog = page.getByRole('dialog', { name: /Crear perfil financiero/i })
   await dialog.getByLabel('Nombre del perfil').fill('E2E Perfil vacio desktop')
   await dialog.getByRole('button', { name: /Crear y capturar datos/i }).click()
@@ -272,17 +311,17 @@ test('shows and navigates the empty desktop dashboard for a real profile', async
   await expect(page.locator('[aria-label="Navegacion principal"]')).toBeVisible()
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('E2E Perfil vacio desktop')
 
-  await page.getByRole('button', { name: 'Estado actual' }).click()
+  await page.getByRole('button', { name: 'Resumen' }).click()
 
   const emptyDashboard = page.locator('.empty-dashboard-grid')
-  await expect(page.getByRole('heading', { name: 'E2E Perfil vacio desktop' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Resumen financiero' })).toBeVisible()
   await expect(emptyDashboard).toBeVisible()
   await expect(emptyDashboard.getByText('Perfil activo sin datos')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Activa el dashboard financiero de este perfil' })).toBeVisible()
   await expect(page.locator('[aria-label="Estado base del perfil"]')).toContainText('0')
   await expect(page.locator('[aria-label="Estado base del perfil"]')).toContainText('cuentas')
   await expect(page.locator('[aria-label="Estado base del perfil"]')).toContainText('documentos')
-  await expect(page.locator('[aria-label="Preparacion del dashboard"]')).toContainText('Perfil independiente')
+  await expect(page.locator('[aria-label="Preparacion del dashboard"]')).toContainText('Información organizada')
   await expect(page.locator('[aria-label="Vista previa profesional del dashboard sin datos"]')).toContainText('Preview operativo')
   await expect(page.locator('[aria-label="Preparacion 0 por ciento"]')).toContainText('0%')
   await expect(page.locator('[aria-label="Indicadores pendientes"]')).toContainText('Score Finanzas OS')
@@ -293,17 +332,17 @@ test('shows and navigates the empty desktop dashboard for a real profile', async
   await emptyDashboard.getByRole('button', { name: 'Capturar primer dato' }).click()
   await expect(page.getByRole('heading', { name: 'Crear meta' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Estado actual' }).click()
+  await page.getByRole('button', { name: 'Resumen' }).click()
   await emptyDashboard.getByRole('button', { name: 'Importar documentos' }).click()
   await expect(page.getByRole('heading', { name: 'Ingreso de documentos' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Estado actual' }).click()
+  await page.getByRole('button', { name: 'Resumen' }).click()
   await emptyDashboard.getByRole('button', { name: 'Crear primera meta' }).click()
   await expect(page.getByRole('heading', { name: 'Metas y planeacion' })).toBeVisible()
 })
 
 test('creates a manual profile and captures an account plus movement', async ({ page }) => {
-  await page.getByRole('button', { name: /Nuevo perfil/i }).first().click()
+  await page.getByRole('button', { name: /Nuevo espacio/i }).first().click()
   const dialog = page.getByRole('dialog', { name: /Crear perfil financiero/i })
   await expect(dialog).toBeVisible()
   await dialog.getByLabel('Nombre del perfil').fill('E2E Perfil captura')
@@ -324,25 +363,33 @@ test('creates a manual profile and captures an account plus movement', async ({ 
   await expect(accountPanel.getByLabel('Nombre')).toBeEmpty()
 
   const movementPanel = page.locator('.capture-card').filter({ has: page.getByRole('heading', { name: 'Registrar movimiento' }) })
+  await movementPanel.getByLabel('Cuenta').selectOption({ label: 'E2E Cuenta Nomina' })
   await movementPanel.getByLabel('Monto').fill('1200')
   await movementPanel.getByLabel('Comercio / origen').fill('E2E Supermercado')
   await movementPanel.getByLabel('Categoría').fill('Supermercado')
   await movementPanel.getByRole('button', { name: /Guardar movimiento/i }).click()
 
-  await page.getByRole('button', { name: 'Estado actual' }).click()
+  const recentData = page.locator('.recent-ledger')
+  await recentData.getByRole('button', { name: 'Eliminar E2E Supermercado' }).click()
+  await expect(page.getByText('Vuelve a tocar eliminar para confirmar que deseas borrar E2E Supermercado.')).toBeVisible()
+  await recentData.getByRole('button', { name: 'Confirmar eliminar E2E Supermercado' }).click()
+  await expect(recentData.getByText('E2E Supermercado')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Resumen' }).click()
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('E2E Perfil captura')
   await expect(page.locator('.kpi', { hasText: 'Score Finanzas OS' })).toBeVisible()
   await expect(page.getByText('Ver datos en tabla').first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Restaurar demo' })).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Movimientos' }).click()
+  await page.locator('nav').getByRole('button', { name: 'Registrar' }).click()
   await expect(page.getByRole('heading', { name: 'Crear meta' })).toBeVisible()
-  await page.getByRole('button', { name: 'Estado actual' }).click()
+  await page.getByRole('button', { name: 'Resumen' }).click()
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('E2E Perfil captura')
   await expect(page.locator('.kpi', { hasText: 'Score Finanzas OS' })).toBeVisible()
 })
 
 test('records a card purchase and payment without double-counting the debt', async ({ page }) => {
-  await page.getByRole('button', { name: /Nuevo perfil/i }).first().click()
+  await page.getByRole('button', { name: /Nuevo espacio/i }).first().click()
   const dialog = page.getByRole('dialog', { name: /Crear perfil financiero/i })
   await dialog.getByLabel('Nombre del perfil').fill('E2E Tarjeta')
   await dialog.getByRole('button', { name: /Crear y capturar datos/i }).click()
@@ -382,7 +429,7 @@ test('records a card purchase and payment without double-counting the debt', asy
 })
 
 test('creates a profile with a starter goal and opens planning', async ({ page }) => {
-  await page.getByRole('button', { name: /Nuevo perfil/i }).first().click()
+  await page.getByRole('button', { name: /Nuevo espacio/i }).first().click()
   const dialog = page.getByRole('dialog', { name: /Crear perfil financiero/i })
   await dialog.getByLabel('Nombre del perfil').fill('E2E Perfil meta')
   await dialog.locator('.starter-goal').getByRole('button', { name: 'Agregar' }).click()
@@ -401,7 +448,7 @@ test('creates a profile with a starter goal and opens planning', async ({ page }
 
 test('shows planning details for the goals demo profile', async ({ page }) => {
   const profileCard = page.locator('.profile-card', { hasText: 'Metas grandes' })
-  await profileCard.getByRole('button', { name: /Abrir dashboard/i }).click()
+  await profileCard.getByRole('button', { name: /Abrir resumen/i }).click()
   await page.getByRole('button', { name: 'Metas' }).click()
 
   await expect(page.getByRole('heading', { name: 'Metas y planeacion' })).toBeVisible()
@@ -410,7 +457,7 @@ test('shows planning details for the goals demo profile', async ({ page }) => {
 })
 
 test('imports synthetic CSV, XML and receipt image into the active profile', async ({ page }) => {
-  await page.getByRole('button', { name: 'Documentos' }).click()
+  await page.locator('nav').getByRole('button', { name: 'Documentos' }).click()
   const fixtures = generateSyntheticDocumentFixtures()
   const csv = [
     'Fecha,Fecha de Compra,Descripción,Titular de la Tarjeta,Cuenta,Importe,Monto en moneda extranjera,Tipo de Cambio,Información Adicional,Aparece en su Estado de Cuenta como,Dirección,Población/Provincia,Código postal,País,Referencia',
@@ -468,6 +515,7 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   const cetesInvestmentPdfBuffer = readFileSync(fixtures.cetesInvestmentPdfPath)
   const pprRetirementPdfBuffer = readFileSync(fixtures.pprRetirementPdfPath)
   const aforeRetirementPdfBuffer = readFileSync(fixtures.aforeRetirementPdfPath)
+  const payrollPdfBuffer = readFileSync(fixtures.payrollPdfPath)
 
   await page
     .locator('label.drop-zone')
@@ -528,12 +576,17 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
         mimeType: 'application/pdf',
         buffer: aforeRetirementPdfBuffer,
       },
+      {
+        name: 'recibo-nomina-demo.pdf',
+        mimeType: 'application/pdf',
+        buffer: payrollPdfBuffer,
+      },
     ])
 
-  await expect(page.getByText(/11 archivo\(s\) procesados/i)).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText(/12 archivo\(s\) procesados/i)).toBeVisible({ timeout: 30_000 })
   const recentDocuments = page.locator('.document-list')
   const documentCards = page.getByTestId('imported-document-card')
-  await expect(documentCards).toHaveCount(11)
+  await expect(documentCards).toHaveCount(12)
   for (const fileName of [
     'e2e-movimientos.csv',
     'e2e-estado-cuenta-nomina.csv',
@@ -546,6 +599,7 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
     'estado-cuenta-cetesdirecto-demo.pdf',
     'estado-cuenta-ppr-demo.pdf',
     'estado-cuenta-afore-demo.pdf',
+    'recibo-nomina-demo.pdf',
   ]) {
     await expect(recentDocuments).not.toContainText(fileName)
   }
@@ -591,7 +645,10 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   await expect(page.getByText(/no duplica el dashboard/i).first()).toBeVisible()
   await expect(page.getByText(/confianza/i).first()).toBeVisible()
   await expect(page.getByText(/OCR local/i).first()).toBeVisible()
-  const payrollXmlCard = page.locator('[data-testid="imported-document-card"][data-document-kind="payroll_cfdi"]').first()
+  const payrollXmlCard = page
+    .locator('[data-testid="imported-document-card"][data-document-kind="payroll_cfdi"]')
+    .filter({ hasText: /XML · Nomina CFDI/i })
+    .first()
   await expect(payrollXmlCard.getByText('Inicio periodo')).toBeVisible()
   await expect(payrollXmlCard.getByText('2026-06-01')).toBeVisible()
   await expect(payrollXmlCard.getByText('Fin periodo')).toBeVisible()
@@ -605,6 +662,15 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   await expect(payrollPerceptions.getByRole('cell', { name: 'Sueldo' })).toHaveCount(0)
   await expect(payrollXmlCard.getByText('Deducciones de nomina para revisar')).toBeVisible()
   await expect(payrollXmlCard.getByText('Otros pagos de nomina para revisar')).toBeVisible()
+  const payrollPdfCard = page
+    .locator('[data-testid="imported-document-card"][data-document-kind="payroll_cfdi"]')
+    .filter({ hasText: /PDF · Nomina CFDI · needs_review/i })
+    .first()
+  await expect(payrollPdfCard.getByText('Fecha pago')).toBeVisible()
+  await expect(payrollPdfCard.getByText('2026-06-15').first()).toBeVisible()
+  await expect(payrollPdfCard.getByText('Inicio periodo')).toBeVisible()
+  await expect(payrollPdfCard.getByText('Emisor nomina')).toBeVisible()
+  await expect(payrollPdfCard.getByText('EMPRESA DEMO SERVICIOS SA DE CV')).toBeVisible()
   const cardPdf = page.locator('[data-testid="imported-document-card"][data-document-kind="credit_card_statement"]').first()
   await expect(cardPdf.getByText(/PDF · Tarjetas de credito · needs_review/i)).toBeVisible()
   await expect(cardPdf.getByText(/Campos clave:/)).toBeVisible()
@@ -701,8 +767,8 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
     details.forEach((detail) => detail.removeAttribute('open'))
   })
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('19 mov.')
-  await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('11 doc(s)')
-  await expect(page.getByText(/Reanalisis local actualizado en 11 documento\(s\)/i)).toBeVisible()
+  await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('12 doc(s)')
+  await expect(page.getByText(/Reanalisis local actualizado en 12 documento\(s\)/i)).toBeVisible()
 
   const profilesResponse = await page.request.get('/api/profiles')
   expect(profilesResponse.ok()).toBe(true)
@@ -825,6 +891,18 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   expect((payrollXmlDocument?.extracted?.perceptionConcepts as Array<{ taxable: number }> | undefined)?.[0]?.taxable).toBe(48000)
   expect(payrollXmlDocument?.extracted?.deductionConcepts).toHaveLength(2)
   expect(payrollXmlDocument?.extracted?.otherPaymentConcepts).toHaveLength(1)
+  const payrollPdfDocument = importedProfile?.importedDocuments.find((document) => document.fileName === 'recibo-nomina-demo.pdf')
+  expect(payrollPdfDocument?.kind).toBe('payroll_cfdi')
+  expect(payrollPdfDocument?.extracted?.paymentDate).toBe('2026-06-15')
+  expect(payrollPdfDocument?.extracted?.periodStart).toBe('2026-06-01')
+  expect(payrollPdfDocument?.extracted?.periodEnd).toBe('2026-06-15')
+  expect(payrollPdfDocument?.extracted?.employerName).toBe('EMPRESA DEMO SERVICIOS SA DE CV')
+  expect(payrollPdfDocument?.extracted?.netIncome).toBe(42000)
+  expect(payrollPdfDocument?.extracted?.grossPay).toBe(48000)
+  expect(payrollPdfDocument?.extracted?.totalDeductions).toBe(6200)
+  expect(payrollPdfDocument?.extracted?.totalOtherPayments).toBe(200)
+  expect(payrollPdfDocument?.extracted?.employerName).not.toMatch(/^000010000007/)
+  expect(payrollPdfDocument?.extracted?.missingFields).toEqual([])
   const cardPdfDocument = importedProfile?.importedDocuments.find((document) => document.fileName === 'estado-cuenta-tarjeta-demo.pdf')
   expect(cardPdfDocument?.kind).toBe('credit_card_statement')
   expect(cardPdfDocument?.status).toBe('needs_review')
@@ -956,6 +1034,32 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
       }),
     ]),
   )
+
+  await page
+    .locator('label.drop-zone')
+    .locator('input[type="file"]')
+    .setInputFiles([
+      {
+        name: 'estado-cuenta-tarjeta-reanalizado.pdf',
+        mimeType: 'application/pdf',
+        buffer: cardPdfBuffer,
+      },
+    ])
+  await expect(page.getByText(/1 archivo\(s\) procesados/i)).toBeVisible({ timeout: 30_000 })
+  const refreshedCardProfilesResponse = await page.request.get('/api/profiles')
+  expect(refreshedCardProfilesResponse.ok()).toBe(true)
+  const refreshedCardProfilesBody = (await refreshedCardProfilesResponse.json()) as { profiles: FinancialProfile[] }
+  const refreshedCardProfile = refreshedCardProfilesBody.profiles.find((profile) =>
+    profile.importedDocuments.some((document) => document.fileName === 'estado-cuenta-tarjeta-reanalizado.pdf'),
+  )
+  const refreshedCardDocument = refreshedCardProfile?.importedDocuments.find((document) => document.fileName === 'estado-cuenta-tarjeta-reanalizado.pdf')
+  expect(refreshedCardDocument?.status).toBe('processed')
+  expect(refreshedCardDocument?.sourceTransactionIds ?? []).toHaveLength(7)
+  expect(refreshedCardDocument?.extracted?.reviewedMovementRowsApproval).toBe('manual_user_action')
+  expect(typeof refreshedCardDocument?.extracted?.reviewedMovementRowsAppliedAt).toBe('string')
+  expect(refreshedCardDocument?.warnings ?? []).toEqual(expect.arrayContaining([expect.stringMatching(/Aprobacion manual previa conservada/i)]))
+  const refreshedCardPdf = page.locator('[data-testid="imported-document-card"][data-document-kind="credit_card_statement"]').first()
+  await expect(refreshedCardPdf.getByRole('button', { name: /Aplicar movimientos revisados/i })).toHaveCount(0)
   const gbmOperationsCsvDocument = importedProfile?.importedDocuments.find((document) => document.fileName === 'operaciones-gbm-demo.csv')
   expect(gbmOperationsCsvDocument?.kind).toBe('investment_statement')
   expect(gbmOperationsCsvDocument?.status).toBe('needs_review')
@@ -1289,7 +1393,7 @@ test('deduplicates split payroll deposits when CFDI was imported first', async (
 })
 
 test('keeps invalid dates and non-CFDI XML in review without applying movements', async ({ page }) => {
-  await page.getByRole('button', { name: 'Documentos' }).click()
+  await page.locator('nav').getByRole('button', { name: 'Documentos' }).click()
   const invalidCsv = [
     'date,amount,merchant,category',
     '2026-99-99,-999,E2E Fecha Invalida,Supermercado',
@@ -1356,5 +1460,6 @@ test('shows privacy controls and local-data messaging', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Privacidad operativa' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Datos locales' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Minimizacion' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Siguiente nivel' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Protección pendiente' })).toBeVisible()
+  await expect(page.getByText(/activa cifrado fuerte/i)).toBeVisible()
 })

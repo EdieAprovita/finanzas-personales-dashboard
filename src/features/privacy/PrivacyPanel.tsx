@@ -15,7 +15,7 @@ export function PrivacyPanel() {
         <article>
           <ShieldCheck size={22} />
           <h3>Datos locales</h3>
-          <p>Datos guardados en SQLite local con fallback IndexedDB. La API escucha en esta computadora y Vite la expone como ruta local de desarrollo.</p>
+          <p>Tu información se guarda localmente en este dispositivo. Los documentos se procesan aquí y no se suben por defecto; la base aún no tiene cifrado propio.</p>
         </article>
         <article>
           <Trash2 size={22} />
@@ -24,8 +24,8 @@ export function PrivacyPanel() {
         </article>
         <article>
           <AlertTriangle size={22} />
-          <h3>Siguiente nivel</h3>
-          <p>Para uso continuo conviene activar cifrado fuerte, backups cifrados, threat model y conectores bancarios formales.</p>
+          <h3>Protección pendiente</h3>
+          <p>Antes de usar datos reales de forma continua, activa cifrado fuerte y backups cifrados.</p>
         </article>
       </div>
     </section>

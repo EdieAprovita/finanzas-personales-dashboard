@@ -1,4 +1,4 @@
-import { ChartNoAxesCombined, CheckCircle2, Database, FolderOpen, Plus, Target, Trash2 } from 'lucide-react'
+import { ChartNoAxesCombined, CheckCircle2, FolderOpen, Plus, RefreshCw, Target, Trash2, WalletCards } from 'lucide-react'
 import type { FinancialProfile } from '../../domain/types'
 import { profileDisplayName, profileFacts } from './profileSummary'
 
@@ -29,53 +29,18 @@ export function ProfileSwitcher({
 }) {
   const orderedProfiles = profiles
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? profiles[0]
-  const activeFacts = activeProfile ? profileFacts(activeProfile) : null
-
   return (
     <section className="profile-strip" aria-label="Perfiles financieros">
-      <div className="profile-strip-heading">
-        <div>
-          <span>Gestion de perfiles</span>
-          <strong>Elige un perfil para abrir su dashboard o limpia todos los perfiles en segundos</strong>
-        </div>
-        <small>{profiles.length} perfil(es)</small>
-      </div>
       <div className="profile-control">
-        {activeFacts && activeProfile && (
-          <div className="active-profile-summary">
-            <strong>{profileDisplayName(activeProfile, profiles)}</strong>
-            <span>
-              {activeFacts.accounts} cuenta(s) · {activeFacts.transactions} movimiento(s) · {activeFacts.documents} documento(s)
-            </span>
-          </div>
-        )}
         <div className="profile-actions">
           <button type="button" className="ghost primary" onClick={() => activeProfile && onChange(activeProfile.id, 'dashboard')}>
-            <ChartNoAxesCombined size={18} /> Abrir dashboard del perfil activo
+            <ChartNoAxesCombined size={18} /> Abrir resumen
           </button>
           <button type="button" className="ghost" onClick={onCreate}>
-            <Plus size={18} /> Nuevo perfil
+            <Plus size={18} /> Nuevo espacio
           </button>
           <button type="button" className="ghost" onClick={onOpenImports}>
-            <FolderOpen size={18} /> Agregar docs al perfil activo
-          </button>
-        </div>
-        <div className={`profile-danger-zone ${pendingDeleteAllProfiles ? 'confirm' : ''}`}>
-          <div>
-            <strong>Borrar todos los perfiles</strong>
-            <span>
-              {pendingDeleteAllProfiles
-                ? 'Vuelve a tocar el boton rojo para confirmar la eliminacion de todos los perfiles.'
-                : 'Elimina todos los perfiles locales y deja la app lista para capturar datos reales desde cero.'}
-            </span>
-          </div>
-          <button
-            type="button"
-            className={`ghost danger ${pendingDeleteAllProfiles ? 'confirm' : ''}`}
-            onClick={onDeleteAll}
-            aria-label={pendingDeleteAllProfiles ? 'Confirmar borrar todos los perfiles' : 'Borrar todos los perfiles'}
-          >
-            <Trash2 size={18} /> {pendingDeleteAllProfiles ? 'Confirmar borrado' : 'Borrar todos los perfiles'}
+            <FolderOpen size={18} /> Importar documentos
           </button>
         </div>
         {profileMessage && (
@@ -112,7 +77,7 @@ export function ProfileSwitcher({
               </button>
               <div className="profile-card-actions">
                 <button type="button" className="mini-action" onClick={() => onChange(profile.id, 'dashboard')}>
-                  <CheckCircle2 size={15} /> Abrir dashboard
+                  <CheckCircle2 size={15} /> Abrir resumen
                 </button>
                 <button
                   type="button"
@@ -126,6 +91,24 @@ export function ProfileSwitcher({
           )
         })}
       </div>
+      <div className={`profile-danger-zone ${pendingDeleteAllProfiles ? 'confirm' : ''}`}>
+        <div>
+          <strong>Borrar todos los perfiles</strong>
+          <span>
+            {pendingDeleteAllProfiles
+              ? 'Vuelve a tocar el boton rojo para confirmar la eliminacion de todos los perfiles.'
+              : 'Elimina todos los perfiles locales y deja la app lista para capturar datos reales desde cero.'}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`ghost danger ${pendingDeleteAllProfiles ? 'confirm' : ''}`}
+          onClick={onDeleteAll}
+          aria-label={pendingDeleteAllProfiles ? 'Confirmar borrar todos los perfiles' : 'Borrar todos los perfiles'}
+        >
+          <Trash2 size={18} /> {pendingDeleteAllProfiles ? 'Confirmar borrado' : 'Borrar todos los perfiles'}
+        </button>
+      </div>
     </section>
   )
 }
@@ -136,12 +119,16 @@ export function ActiveProfileBar({
   onOpenDashboard,
   onBackToProfiles,
   onCreate,
+  canResetDemo,
+  onResetDemo,
 }: {
   profile: FinancialProfile
   profiles: FinancialProfile[]
   onOpenDashboard: () => void
   onBackToProfiles: () => void
   onCreate: () => void
+  canResetDemo: boolean
+  onResetDemo: () => void
 }) {
   const facts = profileFacts(profile)
   return (
@@ -163,6 +150,11 @@ export function ActiveProfileBar({
         <button type="button" className="mini-action" onClick={onCreate}>
           Nuevo
         </button>
+        {canResetDemo && (
+          <button type="button" className="mini-action" onClick={onResetDemo}>
+            <RefreshCw size={15} /> Restaurar demo
+          </button>
+        )}
       </div>
     </section>
   )
@@ -181,19 +173,18 @@ export function EmptyProfilesState({
     <section className="empty-profile-state" aria-label="Sin perfiles financieros">
       <article className="empty-profile-main empty-panel">
         <div className="empty-profile-icon">
-          <Database size={28} />
+          <WalletCards size={28} />
         </div>
         <div>
           <p className="eyebrow">Siguiente accion</p>
-          <h2>Configura tu primer perfil financiero</h2>
+          <h2>Crea tu primer espacio financiero</h2>
           <p>
-            El workspace esta limpio. Crea un perfil real para aislar cuentas, documentos, movimientos y metas en su propio
-            dashboard.
+            Agrega cuentas, documentos, movimientos y metas para empezar a ver tu resumen.
           </p>
         </div>
         <div className="empty-profile-actions">
           <button type="button" className="ghost primary" onClick={onCreate}>
-            <Plus size={18} /> Crear perfil real
+            <Plus size={18} /> Crear espacio
           </button>
           <button type="button" className="ghost" onClick={onRestoreExamples}>
             <Target size={18} /> Restaurar ejemplos

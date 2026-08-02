@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('pdfjs-dist', () => ({
+  getDocument: vi.fn(),
+  GlobalWorkerOptions: {},
+}))
+
 import { calculateMetrics } from './finance'
+import { applyReviewedStatementMovements } from '../lib/importers'
 import { recalculateLatestSnapshot } from './snapshots'
 import type { FinancialProfile } from './types'
 
@@ -96,6 +103,24 @@ describe('calculateMetrics', () => {
     expect(result.kpis.find((kpi) => kpi.label === 'Uso de tarjeta')).toMatchObject({ value: 'Sin datos', availability: 'unavailable' })
   })
 
+  it('shows budget categories without spending and flags overspending', () => {
+    const result = calculateMetrics(
+      profile({
+        budgets: [
+          { category: 'Comida', monthlyLimit: 1000 },
+          { category: 'Salud', monthlyLimit: 500 },
+        ],
+        transactions: [{ id: 'food', date: '2026-06-04', amount: -1200, merchant: 'Mercado', category: 'Comida', accountId: 'cash', type: 'expense' }],
+      }),
+      { period: '2026-06', asOfDate: '2026-07-09' },
+    )
+
+    expect(result.budgetProgress).toMatchObject([
+      { category: 'Comida', amount: 1200, budget: 1000, remaining: -200, status: 'red' },
+      { category: 'Salud', amount: 0, budget: 500, remaining: 500, status: 'green' },
+    ])
+  })
+
   it('leaves historical KPIs unavailable when no dated, reviewed balance exists', () => {
     const result = calculateMetrics(profile(), { period: '2026-06', asOfDate: '2026-07-09' })
 
@@ -137,6 +162,27 @@ describe('calculateMetrics', () => {
     expect(result.kpis.find((kpi) => kpi.label === 'Runway liquido')).toMatchObject({ availability: 'limited' })
     expect(result.kpis.find((kpi) => kpi.label === 'Uso de tarjeta')).toMatchObject({ value: '25%', availability: 'limited' })
     expect(result.dataWarnings.join(' ')).toContain('2 documento(s) conciliado(s)')
+  })
+
+  it('projects cash flow from the last three available reporting months', () => {
+    const result = calculateMetrics(
+      profile({
+        monthlySnapshots: [
+          { month: '2026-04', income: 10000, expenses: 6000, debtPayments: 500, savings: 3500, netWorth: 10000 },
+          { month: '2026-05', income: 12000, expenses: 7000, debtPayments: 500, savings: 4500, netWorth: 14500 },
+          { month: '2026-06', income: 11000, expenses: 6500, debtPayments: 500, savings: 4000, netWorth: 18500 },
+        ],
+      }),
+      { period: '2026-06', asOfDate: '2026-07-09' },
+    )
+
+    expect(result.cashFlowForecast).toEqual({
+      monthsAnalyzed: 3,
+      projectedIncome: 11000,
+      projectedExpenses: 6500,
+      projectedDebtPayments: 500,
+      projectedCashFlow: 4000,
+    })
   })
 
   it('does not limit current KPIs for a PDF awaiting review when it has not applied data', () => {
@@ -272,5 +318,36 @@ describe('recalculateLatestSnapshot', () => {
         sourceDocumentIds: ['bank-june', 'card-june'],
       }),
     )
+  })
+})
+
+describe('applyReviewedStatementMovements', () => {
+  it('applies a reviewed payroll PDF only with a detected payment date and net income', () => {
+    const result = applyReviewedStatementMovements(
+      profile({
+        accounts: [],
+        importedDocuments: [
+          {
+            id: 'payroll-pdf',
+            fileName: 'nomina.pdf',
+            fileType: 'pdf',
+            importedAt: '2026-07-13T00:00:00.000Z',
+            status: 'needs_review',
+            summary: 'Nomina PDF revisada.',
+            extractedRows: 0,
+            kind: 'payroll_cfdi',
+            detectedInstitution: 'Empresa',
+            extracted: { paymentDate: '2026-06-15', netIncome: 12000 },
+          },
+        ],
+      }),
+      'payroll-pdf',
+    )
+
+    expect(result.profile.transactions).toMatchObject([
+      { date: '2026-06-15', amount: 12000, category: 'Nomina', type: 'income' },
+    ])
+    expect(result.document.status).toBe('processed')
+    expect(result.document.extracted?.reviewedMovementRowsApplied).toBe(1)
   })
 })

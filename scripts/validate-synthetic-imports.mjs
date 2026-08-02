@@ -62,7 +62,7 @@ if (
 ) {
   failures.push('XML CFDI nomina sintetico no produjo version, periodo, receptor, timbre, ISR/IMSS y otros pagos esperados.')
 }
-if (result.pdf.files < 6 || result.pdf.readable < 6) failures.push('No se generaron o leyeron los PDF sinteticos esperados de tarjeta, ahorro, inversion y retiro.')
+if (result.pdf.files < 7 || result.pdf.readable < 7) failures.push('No se generaron o leyeron los PDF sinteticos esperados de tarjeta, ahorro, inversion, retiro y nomina.')
 if (result.pdf.pagesRead < result.pdf.pages || result.pdf.layoutLines < 30 || result.pdf.textItems < 60) {
   failures.push('PDF sintetico no produjo suficientes senales de lectura por layout en las paginas generadas.')
 }

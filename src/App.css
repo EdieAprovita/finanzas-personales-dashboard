@@ -61,7 +61,7 @@
   min-width: 0;
   width: min(100%, 1280px);
   margin: 0 auto;
-  padding: 18px 14px calc(94px + env(safe-area-inset-bottom));
+  padding: 18px 14px calc(142px + env(safe-area-inset-bottom));
 }
 
 button:focus-visible,
@@ -110,6 +110,17 @@ summary:focus-visible {
   gap: 8px;
 }
 
+.workspace-message {
+  margin: -6px 0 16px;
+  padding: 10px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .empty-hero-points {
   display: flex;
   flex-wrap: wrap;
@@ -136,32 +147,11 @@ summary:focus-visible {
   margin-bottom: 16px;
 }
 
-.profile-strip-heading {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.profile-strip-heading span,
 .profile-card span {
   color: var(--blue);
   font-size: 11px;
   font-weight: 900;
   text-transform: uppercase;
-}
-
-.profile-strip-heading strong {
-  display: block;
-  margin-top: 3px;
-  color: var(--text);
-  font-size: 15px;
-}
-
-.profile-strip-heading small {
-  color: var(--muted);
-  font-weight: 800;
-  white-space: nowrap;
 }
 
 .profile-cards {
@@ -237,6 +227,12 @@ summary:focus-visible {
   font-size: 12px;
   font-weight: 800;
   line-height: 1.35;
+}
+
+@media (max-width: 719px) {
+  .profile-danger-zone {
+    margin-top: 224px;
+  }
 }
 
 .profile-card {
@@ -386,7 +382,7 @@ summary:focus-visible {
 
 .active-context-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
   gap: 8px;
 }
 
@@ -1894,6 +1890,76 @@ summary:focus-visible {
   font-weight: 900;
 }
 
+.chart-lg {
+  height: 340px;
+  min-height: 340px;
+}
+
+.finance-chart-toolbar,
+.budget-filter,
+.document-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -2px 0 14px;
+}
+
+.finance-chart-toolbar {
+  justify-content: space-between;
+}
+
+.finance-chart-toolbar > div,
+.budget-filter,
+.document-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.finance-chart-toolbar button,
+.budget-filter button,
+.document-filter button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.finance-chart-toolbar button.active,
+.budget-filter button.active,
+.document-filter button.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.budget-filter button.red {
+  border-color: #fdba74;
+  color: #9a3412;
+}
+
+.budget-filter button.yellow {
+  border-color: #fde68a;
+  color: #a16207;
+}
+
+.finance-chart-toolbar p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.finance-chart-toolbar p strong {
+  color: var(--text);
+}
+
 .goal-list,
 .document-list,
 .privacy-grid {
@@ -2281,6 +2347,7 @@ summary:focus-visible {
   cursor: pointer;
 }
 
+.file-input,
 .drop-zone input {
   position: absolute;
   width: 1px;
@@ -2291,6 +2358,11 @@ summary:focus-visible {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+.drop-zone:focus-within {
+  outline: 3px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 3px;
 }
 
 .import-actions {

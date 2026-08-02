@@ -69,6 +69,7 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
   const [editingGoalId, setEditingGoalId] = useState('')
   const [goalError, setGoalError] = useState('')
   const [message, setMessage] = useState('')
+  const [pendingDeletion, setPendingDeletion] = useState<{ type: 'account' | 'transaction' | 'goal'; id: string } | null>(null)
 
   const paymentAccounts = profile.accounts.filter((row) => !isDebtAccount(row.type))
 
@@ -194,7 +195,13 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
 
   function removeTransaction(row: Transaction): void {
     if (!row.isManual) return
+    if (pendingDeletion?.type !== 'transaction' || pendingDeletion.id !== row.id) {
+      setPendingDeletion({ type: 'transaction', id: row.id })
+      setMessage(`Vuelve a tocar eliminar para confirmar que deseas borrar ${row.merchant}.`)
+      return
+    }
     onChange(reverseManualTransaction(profile, row))
+    setPendingDeletion(null)
     setMessage('Movimiento manual eliminado.')
   }
 
@@ -217,8 +224,25 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
       setMessage('No puedes eliminar una cuenta con movimientos. Elimina o corrige sus movimientos primero.')
       return
     }
+    if (pendingDeletion?.type !== 'account' || pendingDeletion.id !== row.id) {
+      setPendingDeletion({ type: 'account', id: row.id })
+      setMessage(`Vuelve a tocar eliminar para confirmar que deseas borrar ${row.name}.`)
+      return
+    }
     onChange({ ...profile, accounts: profile.accounts.filter((candidate) => candidate.id !== row.id), debts: profile.debts.filter((debt) => debt.accountId !== row.id) })
+    setPendingDeletion(null)
     setMessage('Cuenta eliminada.')
+  }
+
+  function removeGoal(row: Goal): void {
+    if (pendingDeletion?.type !== 'goal' || pendingDeletion.id !== row.id) {
+      setPendingDeletion({ type: 'goal', id: row.id })
+      setMessage(`Vuelve a tocar eliminar para confirmar que deseas borrar la meta ${row.name}.`)
+      return
+    }
+    onChange({ ...profile, goals: profile.goals.filter((goalRow) => goalRow.id !== row.id) })
+    setPendingDeletion(null)
+    setMessage('Meta eliminada.')
   }
 
   function editGoal(row: Goal): void {
@@ -295,9 +319,9 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
         <div className="panel-heading"><div><h2>Datos recientes</h2><p>Edita o elimina los registros manuales antes de confiar en el dashboard.</p></div></div>
         {message && <p className="profile-message" role="status" aria-live="polite">{message}</p>}
         <div className="recent-ledger-grid">
-          <article><h3>Cuentas</h3>{profile.accounts.map((row) => <div key={row.id}><span>{row.name} · {mxn(row.balance)}</span><button type="button" onClick={() => editAccount(row)} aria-label={`Editar ${row.name}`}><Pencil size={15} /></button><button type="button" onClick={() => removeAccount(row)} aria-label={`Eliminar ${row.name}`}><Trash2 size={15} /></button></div>)}</article>
-          <article><h3>Movimientos manuales</h3>{profile.transactions.filter((row) => row.isManual).slice(0, 8).map((row) => <div key={row.id}><span>{row.date} · {row.merchant} · {mxn(row.amount)}</span><button type="button" onClick={() => editTransaction(row)} aria-label={`Editar ${row.merchant}`}><Pencil size={15} /></button><button type="button" onClick={() => removeTransaction(row)} aria-label={`Eliminar ${row.merchant}`}><Trash2 size={15} /></button></div>)}</article>
-          <article><h3>Metas</h3>{profile.goals.map((row) => <div key={row.id}><span>{row.name} · {mxn(row.targetAmount)}</span><button type="button" onClick={() => editGoal(row)} aria-label={`Editar ${row.name}`}><Pencil size={15} /></button><button type="button" onClick={() => onChange({ ...profile, goals: profile.goals.filter((goalRow) => goalRow.id !== row.id) })} aria-label={`Eliminar ${row.name}`}><Trash2 size={15} /></button></div>)}</article>
+          <article><h3>Cuentas</h3>{profile.accounts.map((row) => { const isPending = pendingDeletion?.type === 'account' && pendingDeletion.id === row.id; return <div key={row.id}><span>{row.name} · {mxn(row.balance)}</span><button type="button" onClick={() => editAccount(row)} aria-label={`Editar ${row.name}`}><Pencil size={15} /></button><button type="button" onClick={() => removeAccount(row)} aria-label={isPending ? `Confirmar eliminar ${row.name}` : `Eliminar ${row.name}`}><Trash2 size={15} /></button></div> })}</article>
+          <article><h3>Movimientos manuales</h3>{profile.transactions.filter((row) => row.isManual).slice(0, 8).map((row) => { const isPending = pendingDeletion?.type === 'transaction' && pendingDeletion.id === row.id; return <div key={row.id}><span>{row.date} · {row.merchant} · {mxn(row.amount)}</span><button type="button" onClick={() => editTransaction(row)} aria-label={`Editar ${row.merchant}`}><Pencil size={15} /></button><button type="button" onClick={() => removeTransaction(row)} aria-label={isPending ? `Confirmar eliminar ${row.merchant}` : `Eliminar ${row.merchant}`}><Trash2 size={15} /></button></div> })}</article>
+          <article><h3>Metas</h3>{profile.goals.map((row) => { const isPending = pendingDeletion?.type === 'goal' && pendingDeletion.id === row.id; return <div key={row.id}><span>{row.name} · {mxn(row.targetAmount)}</span><button type="button" onClick={() => editGoal(row)} aria-label={`Editar ${row.name}`}><Pencil size={15} /></button><button type="button" onClick={() => removeGoal(row)} aria-label={isPending ? `Confirmar eliminar ${row.name}` : `Eliminar ${row.name}`}><Trash2 size={15} /></button></div> })}</article>
         </div>
       </section>
       </div>
