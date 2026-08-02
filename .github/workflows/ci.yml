@@ -37,7 +37,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Set up Python for synthetic fixtures
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -119,7 +119,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Set up Python for synthetic E2E fixtures
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
