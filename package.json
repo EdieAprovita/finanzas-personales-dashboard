@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": "26.5.0",
+    "npm": ">=11"
+  },
   "scripts": {
     "api": "node server/index.mjs",
     "api:lan": "FINANZAS_LAN_MODE=1 node server/index.mjs",

@@ -22,6 +22,14 @@ npm run build
 npm run lint
 ```
 
+## CI/CD
+
+- **CI** corre en cada rama, pull request y ejecucion manual: formato Git, lint, pruebas unitarias, matriz de conocimiento, corpus documental sintetico, build y E2E aislado en Chromium para movil y escritorio.
+- **Delivery candidate** corre en `main` y publica un artefacto inmutable con `dist`, `server`, `public`, manifiestos npm y checksum SHA-256. Es el paquete validado para un entorno de despliegue.
+- Un tag `v*` crea una GitHub Release con el mismo paquete y checksum. Los documentos reales, `test:imports:real`, la base SQLite local y benchmarks no se ejecutan en GitHub Actions.
+
+La app no puede desplegarse como sitio estatico: el frontend necesita la API Node y una SQLite persistente. Antes de desplegar un artefacto, configura un destino con volumen persistente para `data/`, proceso Node 26 para la API, un servidor estatico/reverse proxy para `dist` y una politica de cifrado, backups y autenticacion. No se deben exponer datos financieros ni secretos en PRs.
+
 Para usarla desde tu celular o desde otro navegador en la misma red, deja corriendo `npm run api:lan` en una terminal y `npm run dev:mobile` en otra. Abre la URL LAN que imprime Vite, por ejemplo `http://192.168.x.x:5173/`. El navegador usa rutas `/api`; Vite las reenvia a la API local en tu computadora.
 
 En modo LAN la API escucha en todas las interfaces y acepta orígenes IPv4 privados (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`). Para un hostname o puerto adicional puedes configurar `FINANZAS_ALLOWED_ORIGINS=http://mi-host:5173 npm run api:lan`. CORS no reemplaza autenticacion; usa este modo solo en una red privada confiable y detenlo al terminar.

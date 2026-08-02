@@ -1,12 +1,13 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
+const bundledPython = join(homedir(), '.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3')
 const runtimePython =
   process.env.CODEX_BUNDLED_PYTHON ??
   process.env.PYTHON ??
-  join(homedir(), '.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3')
+  (existsSync(bundledPython) ? bundledPython : 'python3')
 
 export function generateSyntheticDocumentFixtures() {
   const dir = mkdtempSync(join(tmpdir(), 'finanzas-doc-fixtures-'))
