@@ -5,6 +5,7 @@ export interface Kpi {
   value: string
   helper: string
   status: Status
+  availability: 'ready' | 'limited' | 'unavailable'
 }
 
 export interface FinancialMetrics {
@@ -30,6 +31,8 @@ export interface FinancialMetrics {
   kpis: Kpi[]
   categorySpend: { category: string; amount: number; budget: number }[]
   goalReadiness: GoalReadiness[]
+  isHistoricalPeriod: boolean
+  dataWarnings: string[]
 }
 
 export interface FinancialMetricContext {
@@ -69,12 +72,14 @@ export function pct(value: number) {
 }
 
 function statusBy(value: number, green: (n: number) => boolean, yellow: (n: number) => boolean): Status {
+  if (!Number.isFinite(value)) return 'yellow'
   if (green(value)) return 'green'
   if (yellow(value)) return 'yellow'
   return 'red'
 }
 
 function normalizeScore(value: number, min: number, max: number, inverse = false) {
+  if (!Number.isFinite(value)) return 0
   const bounded = Math.max(min, Math.min(max, value))
   const normalized = ((bounded - min) / (max - min)) * 100
   return inverse ? 100 - normalized : normalized
@@ -92,7 +97,7 @@ function safeRatio(numerator: number, denominator: number, fallback = 0) {
 }
 
 function recentMonthlySavingsCapacity(snapshots: MonthlySnapshot[], currentPeriod: string) {
-  const recent = [...snapshots].filter((row) => row.month < currentPeriod).sort((left, right) => left.month.localeCompare(right.month)).slice(-6)
+  const recent = [...snapshots].filter((row) => row.month <= currentPeriod).sort((left, right) => left.month.localeCompare(right.month)).slice(-6)
   if (!recent.length) return 0
   const total = recent.reduce((sum, row) => sum + row.income - row.expenses - row.debtPayments, 0)
   return Math.max(0, total / recent.length)
@@ -102,8 +107,14 @@ function emptySnapshot(month: string): MonthlySnapshot {
   return { month, income: 0, expenses: 0, debtPayments: 0, savings: 0, netWorth: 0 }
 }
 
-function averageEssentialExpenses(profile: FinancialProfile, period: string, asOfDate: string) {
-  const currentPeriod = asOfDate.slice(0, 7)
+function accountAssetValue(profile: FinancialProfile, accountId: string, fallbackBalance: number) {
+  const positions = (profile.investmentPositions ?? []).filter((position) => position.accountId === accountId && position.currency === profile.reportingCurrency)
+  if (!positions.length) return Math.max(0, fallbackBalance)
+  return positions.reduce((sum, position) => sum + position.marketValue, 0)
+}
+
+function averageEssentialExpenses(profile: FinancialProfile, period: string) {
+  const currentPeriod = period
   const completedPeriods = [...new Set(profile.transactions.map((tx) => tx.date.slice(0, 7)))]
     .filter((month) => month < currentPeriod)
     .sort()
@@ -120,24 +131,35 @@ function averageEssentialExpenses(profile: FinancialProfile, period: string, asO
   return total / periods.length
 }
 
+function pendingReviewDocumentsAffectingPeriod(profile: FinancialProfile, period: string) {
+  const transactionsById = new Map(profile.transactions.map((transaction) => [transaction.id, transaction]))
+  return profile.importedDocuments.filter((document) => {
+    if (document.status !== 'needs_review') return false
+    return (document.sourceTransactionIds ?? []).some((transactionId) => transactionsById.get(transactionId)?.date.startsWith(period))
+  }).length
+}
+
 export function calculateMetrics(profile: FinancialProfile, context: FinancialMetricContext): FinancialMetrics {
   const { period, asOfDate } = context
+  const currentPeriod = asOfDate.slice(0, 7)
+  const isHistoricalPeriod = period !== currentPeriod
   const snapshotsThroughPeriod = [...profile.monthlySnapshots]
     .filter((row) => row.month <= period)
     .sort((left, right) => left.month.localeCompare(right.month))
   const latest = profile.monthlySnapshots.find((row) => row.month === period) ?? emptySnapshot(period)
   const threeMonthsAgo = snapshotsThroughPeriod.at(-4) ?? snapshotsThroughPeriod[0]
   const hasFinancialInputs = profile.accounts.length > 0 || profile.transactions.length > 0 || profile.importedDocuments.length > 0
-  const netIncomeBase = Math.max(0, profile.netMonthlyIncome || latest.income || 0)
-  const grossIncomeBase = Math.max(0, profile.grossMonthlyIncome || profile.netMonthlyIncome || latest.income || 0)
+  const hasPeriodData = profile.monthlySnapshots.some((row) => row.month === period) || profile.transactions.some((tx) => tx.date.startsWith(period))
+  const netIncomeBase = Math.max(0, isHistoricalPeriod ? latest.income : profile.netMonthlyIncome || latest.income || 0)
+  const grossIncomeBase = Math.max(0, isHistoricalPeriod ? latest.income : profile.grossMonthlyIncome || profile.netMonthlyIncome || latest.income || 0)
   const mxnAccounts = profile.accounts.filter((account) => account.currency === profile.reportingCurrency)
   const excludedForeignAccountCount = profile.accounts.length - mxnAccounts.length
-  const liquidCash = mxnAccounts
+  const currentLiquidCash = mxnAccounts
     .filter((account) => ['checking', 'savings'].includes(account.type))
     .reduce((sum, account) => sum + Math.max(0, account.balance), 0)
   const assets = mxnAccounts
     .filter((account) => account.type !== 'credit_card' && account.type !== 'loan')
-    .reduce((sum, account) => sum + Math.max(0, account.balance), 0)
+    .reduce((sum, account) => sum + accountAssetValue(profile, account.id, account.balance), 0)
   const linkedDebtAccountIds = new Set(profile.debts.map((debt) => debt.accountId).filter((id): id is string => Boolean(id)))
   const accountLiabilities = mxnAccounts
     .filter((account) => ['credit_card', 'loan'].includes(account.type) && !linkedDebtAccountIds.has(account.id))
@@ -146,22 +168,27 @@ export function calculateMetrics(profile: FinancialProfile, context: FinancialMe
     .filter((debt) => (debt.currency ?? 'MXN') === profile.reportingCurrency)
     .reduce((sum, debt) => sum + Math.max(0, debt.balance), 0)
   const liabilities = accountLiabilities + debtLiabilities
-  const netWorth = assets - liabilities
-  const essentialExpenses = averageEssentialExpenses(profile, period, asOfDate)
+  const netWorth = isHistoricalPeriod ? latest.netWorth : assets - liabilities
+  const historicalLiquidCash = latest.liquidCash
+  const liquidCash = isHistoricalPeriod && typeof historicalLiquidCash === 'number' ? historicalLiquidCash : isHistoricalPeriod ? Number.NaN : currentLiquidCash
+  const essentialExpenses = averageEssentialExpenses(profile, period)
   const totalOutflows = latest.expenses + latest.debtPayments
   const cashFlow = latest.income - totalOutflows
-  const monthlyCashFlowMargin = safeRatio(cashFlow, netIncomeBase)
-  const runwayMonths = liquidCash / Math.max(1, essentialExpenses)
-  const savingsRate = safeRatio(latest.savings, netIncomeBase)
+  const monthlyCashFlowMargin = safeRatio(cashFlow, netIncomeBase, Number.NaN)
+  const runwayMonths = Number.isFinite(liquidCash) && essentialExpenses > 0 ? liquidCash / essentialExpenses : Number.NaN
   const reportingDebts = profile.debts.filter((debt) => (debt.currency ?? 'MXN') === profile.reportingCurrency)
-  const debtMinimums = reportingDebts.reduce((sum, debt) => sum + debt.minimumPayment, 0)
-  const debtToIncome = safeRatio(debtMinimums, grossIncomeBase)
-  const cardDebt = reportingDebts.filter((debt) => debt.creditLimit).reduce((sum, debt) => sum + debt.balance, 0)
-  const cardLimit = reportingDebts.filter((debt) => debt.creditLimit).reduce((sum, debt) => sum + (debt.creditLimit ?? 0), 0)
-  const creditUtilization = cardLimit > 0 ? cardDebt / cardLimit : 0
+  const currentDebtMinimums = reportingDebts.reduce((sum, debt) => sum + debt.minimumPayment, 0)
+  const debtMinimums = isHistoricalPeriod ? latest.debtMinimumPayments : currentDebtMinimums
+  const debtToIncome = typeof debtMinimums === 'number' ? safeRatio(debtMinimums, grossIncomeBase, Number.NaN) : Number.NaN
+  const currentCardDebt = reportingDebts.filter((debt) => debt.creditLimit).reduce((sum, debt) => sum + debt.balance, 0)
+  const currentCardLimit = reportingDebts.filter((debt) => debt.creditLimit).reduce((sum, debt) => sum + (debt.creditLimit ?? 0), 0)
+  const cardDebt = isHistoricalPeriod ? latest.cardBalance : currentCardDebt
+  const cardLimit = isHistoricalPeriod ? latest.cardLimit : currentCardLimit
+  const creditUtilization = typeof cardDebt === 'number' && typeof cardLimit === 'number' && cardLimit > 0 ? cardDebt / cardLimit : Number.NaN
+  const savingsRate = Number.isFinite(netIncomeBase) && netIncomeBase > 0 ? safeRatio(latest.savings, netIncomeBase, Number.NaN) : Number.NaN
   const netWorthTrend3M = threeMonthsAgo ? (latest.netWorth - threeMonthsAgo.netWorth) / Math.max(1, Math.abs(threeMonthsAgo.netWorth)) : 0
 
-  const goalMonthlyCapacity = recentMonthlySavingsCapacity(profile.monthlySnapshots, asOfDate.slice(0, 7))
+  const goalMonthlyCapacity = recentMonthlySavingsCapacity(profile.monthlySnapshots, period)
   const baseGoalReadiness = profile.goals.map((goal) => {
     const warnings: string[] = []
     const targetAmount = Number(goal.targetAmount)
@@ -239,9 +266,30 @@ export function calculateMetrics(profile: FinancialProfile, context: FinancialMe
     goals: goalScore * 0.1,
     budget: budgetDisciplineScore * 0.05,
   }
+  const pendingReviewDocuments = pendingReviewDocumentsAffectingPeriod(profile, period)
+  const scoreAvailability: Kpi['availability'] = !hasFinancialInputs || !hasPeriodData ? 'unavailable' : isHistoricalPeriod || pendingReviewDocuments > 0 ? 'limited' : 'ready'
   let financialHealthScore = Math.round(Object.values(scoreBreakdown).reduce((sum, value) => sum + value, 0))
   if (cashFlow < 0) financialHealthScore = Math.min(financialHealthScore, 59)
-  if (!hasFinancialInputs) financialHealthScore = 0
+  if (!hasFinancialInputs || !hasPeriodData) financialHealthScore = 0
+  const dataWarnings = [
+    ...(pendingReviewDocuments
+      ? [`${pendingReviewDocuments} documento(s) pendientes de revisión ya aportan movimientos a ${period}; revisa su conciliación antes de confiar completamente en los KPIs de ese periodo.`]
+      : []),
+    ...(isHistoricalPeriod && !latest.sourceDocumentIds?.length
+      ? ['El periodo seleccionado es histórico. Aún no hay estados conciliados con fecha para conservar efectivo, deuda o límite de tarjeta de ese mes.']
+      : []),
+    ...(isHistoricalPeriod && latest.sourceDocumentIds?.length
+      ? [
+          `Periodo histórico respaldado por ${latest.sourceDocumentIds.length} documento(s) conciliado(s). Los saldos pueden ser parciales si faltan estados de otras cuentas.`,
+          ...(!Number.isFinite(runwayMonths) ? ['Falta un saldo de liquidez fechado para calcular runway.'] : []),
+          ...(!Number.isFinite(debtToIncome) ? ['Falta pago mínimo de deuda fechado para calcular la presión de deuda.'] : []),
+          ...(!Number.isFinite(creditUtilization) ? ['Falta saldo y límite de tarjeta fechados para calcular su uso.'] : []),
+        ]
+      : []),
+    ...(profile.accounts.some((account) => account.currency !== profile.reportingCurrency)
+      ? ['Hay cuentas en otra moneda excluidas hasta capturar un tipo de cambio fechado.']
+      : []),
+  ]
 
   const categorySpend = profile.transactions
     .filter((tx) => tx.type === 'expense' && tx.date.startsWith(period))
@@ -257,27 +305,40 @@ export function calculateMetrics(profile: FinancialProfile, context: FinancialMe
   const kpis: Kpi[] = [
     {
       label: 'Score Finanzas OS',
-      value: hasFinancialInputs ? `${financialHealthScore}/100` : 'Sin datos',
-      helper: hasFinancialInputs ? `Indicador propio para ${period}; no es una calificacion crediticia.` : 'Agrega cuentas, movimientos o documentos para calcularlo.',
+      value: scoreAvailability === 'unavailable' ? 'Sin datos' : `${financialHealthScore}/100`,
+      helper:
+        scoreAvailability === 'unavailable'
+          ? 'Agrega movimientos o un snapshot del periodo para calcularlo.'
+          : scoreAvailability === 'limited'
+            ? `Lectura limitada para ${period}; revisa calidad documental y periodo.`
+            : `Indicador propio para ${period}; no es una calificacion crediticia.`,
       status: statusBy(financialHealthScore, (n) => n >= 80, (n) => n >= 60),
+      availability: scoreAvailability,
     },
     {
       label: 'Flujo mensual',
-      value: mxn(cashFlow),
+      value: hasPeriodData ? mxn(cashFlow) : 'Sin datos',
       helper: netIncomeBase > 0 ? `${pct(monthlyCashFlowMargin)} del ingreso neto.` : 'Captura ingreso neto para calcular margen.',
       status: statusBy(monthlyCashFlowMargin, (n) => n >= 0.15, (n) => n >= 0),
+      availability: hasPeriodData && netIncomeBase > 0 ? 'ready' : 'limited',
     },
     {
       label: 'Runway liquido',
-      value: `${runwayMonths.toFixed(1)} meses`,
-      helper: `${mxn(liquidCash)} contra gastos esenciales.`,
+      value: Number.isFinite(runwayMonths) ? runwayMonths > 36 ? '>36 meses' : `${runwayMonths.toFixed(1)} meses` : 'Sin datos',
+      helper: Number.isFinite(runwayMonths)
+        ? `${mxn(liquidCash)} contra gastos esenciales.${isHistoricalPeriod ? ' Saldo histórico documentado; confirma cobertura de todas las cuentas.' : ''}`
+        : 'Requiere gastos esenciales y saldos históricos confiables.',
       status: statusBy(runwayMonths, (n) => n >= 6, (n) => n >= 3),
+      availability: Number.isFinite(runwayMonths) ? (isHistoricalPeriod ? 'limited' : 'ready') : 'unavailable',
     },
     {
       label: 'Uso de tarjeta',
-      value: pct(creditUtilization),
-      helper: 'Balance de tarjeta sobre limite disponible.',
+      value: Number.isFinite(creditUtilization) ? pct(creditUtilization) : 'Sin datos',
+      helper: Number.isFinite(creditUtilization)
+        ? `Balance de tarjeta sobre limite disponible.${isHistoricalPeriod ? ' Valores históricos documentados; confirma cobertura de todas las tarjetas.' : ''}`
+        : 'Captura saldo y limite de tarjeta para calcularlo.',
       status: statusBy(creditUtilization, (n) => n < 0.3, (n) => n < 0.5),
+      availability: Number.isFinite(creditUtilization) ? (isHistoricalPeriod ? 'limited' : 'ready') : 'unavailable',
     },
   ]
 
@@ -304,5 +365,7 @@ export function calculateMetrics(profile: FinancialProfile, context: FinancialMe
     kpis,
     categorySpend,
     goalReadiness,
+    isHistoricalPeriod,
+    dataWarnings,
   }
 }

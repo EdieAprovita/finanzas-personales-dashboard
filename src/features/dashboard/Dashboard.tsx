@@ -74,6 +74,37 @@ function ChartFrame({ className, children }: { className: string; children: (siz
   )
 }
 
+function ChartDataTable({
+  label,
+  columns,
+  rows,
+}: {
+  label: string
+  columns: string[]
+  rows: Array<Array<string | number>>
+}) {
+  return (
+    <details className="chart-data-details">
+      <summary>Ver datos en tabla</summary>
+      <div className="chart-data-scroll">
+        <table>
+          <caption>{label}</caption>
+          <thead>
+            <tr>{columns.map((column) => <th key={column} scope="col">{column}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={`${label}-${index}`}>
+                {row.map((value, valueIndex) => <td key={`${label}-${index}-${valueIndex}`}>{value}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  )
+}
+
 export function Dashboard({
   profile,
   metrics,
@@ -376,14 +407,21 @@ export function Dashboard({
       )}
       <section className="kpi-grid">
         {metrics.kpis.map((kpi) => (
-          <article className={`kpi ${kpi.status}`} key={kpi.label}>
+          <article className={`kpi ${kpi.status} ${kpi.availability}`} key={kpi.label}>
             <span>{kpi.label}</span>
             <strong>{kpi.value}</strong>
             <p>{kpi.helper}</p>
-            <small>{statusLabel(kpi.status)}</small>
+            <small>{kpi.availability === 'unavailable' ? 'Sin datos suficientes' : kpi.availability === 'limited' ? 'Lectura limitada' : statusLabel(kpi.status)}</small>
           </article>
         ))}
       </section>
+
+      {metrics.dataWarnings.length > 0 && (
+        <section className="panel wide data-warning" aria-label="Limitaciones de datos">
+          <AlertTriangle size={18} />
+          <span>{metrics.dataWarnings.join(' ')}</span>
+        </section>
+      )}
 
       <details className="panel wide score-details">
         <summary>Cómo se forma el Score Finanzas OS</summary>
@@ -487,6 +525,11 @@ export function Dashboard({
               </LineChart>
           )}
         </ChartFrame>
+        <ChartDataTable
+          label="Datos mensuales de flujo, ahorro y patrimonio"
+          columns={['Mes', 'Ingreso', 'Gasto', 'Ahorro', 'Patrimonio']}
+          rows={profile.monthlySnapshots.map((snapshot) => [snapshot.month, mxn(snapshot.income), mxn(snapshot.expenses), mxn(snapshot.savings), mxn(snapshot.netWorth)])}
+        />
       </section>
 
       <section className="panel">
@@ -508,6 +551,11 @@ export function Dashboard({
               </BarChart>
           )}
         </ChartFrame>
+        <ChartDataTable
+          label="Datos de gasto por categoría"
+          columns={['Categoría', 'Gasto', 'Presupuesto']}
+          rows={metrics.categorySpend.map((entry) => [entry.category, mxn(entry.amount), mxn(entry.budget)])}
+        />
       </section>
 
       <section className="panel">
@@ -539,6 +587,11 @@ export function Dashboard({
               </PieChart>
           )}
         </ChartFrame>
+        <ChartDataTable
+          label="Datos del mix de gasto"
+          columns={['Categoría', 'Gasto']}
+          rows={metrics.categorySpend.map((entry) => [entry.category, mxn(entry.amount)])}
+        />
       </section>
     </div>
   )

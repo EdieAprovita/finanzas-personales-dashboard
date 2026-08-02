@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "api": "node server/index.mjs",
+    "api:lan": "FINANZAS_LAN_MODE=1 node server/index.mjs",
     "dev": "vite",
     "dev:mobile": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",

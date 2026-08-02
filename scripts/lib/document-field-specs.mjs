@@ -17,6 +17,11 @@ const fieldLabelByKey = {
   availableToWithdraw: 'disponible retirar',
   bankReconciliationStatus: 'conciliacion banco',
   cardMovementRows: 'movimientos tarjeta',
+  cardActivityRows: 'movimientos de actividad',
+  cardActivityDates: 'fechas de actividad',
+  cardActivityDescriptions: 'descripciones de actividad',
+  cardActivityAmounts: 'montos de actividad',
+  cardActivityCurrency: 'moneda de actividad',
   cardPaymentScenarios: 'escenarios pago',
   cardReconciliationStatus: 'conciliacion tarjeta',
   cashBalance: 'efectivo',
@@ -140,6 +145,9 @@ export function documentFieldLabel(key) {
 
 export function documentSubtypeForExtracted(kind, extracted = {}) {
   if (kind === 'credit_card_statement') {
+    if (extracted.schema === 'amex_account_activity_mx' || extracted.documentSubtype === 'credit_card_statement.card_activity') {
+      return { key: 'credit_card_statement.card_activity', label: 'Actividad de tarjeta' }
+    }
     if (populated(extracted.cardPaymentScenarios)) return { key: 'credit_card_statement.payment_scenarios', label: 'Tarjeta con escenarios' }
     if (populated(extracted.cardMovementRows)) return { key: 'credit_card_statement.movement_review', label: 'Tarjeta con movimientos' }
     return { key: 'credit_card_statement.statement', label: 'Estado de tarjeta' }
@@ -178,6 +186,9 @@ export function documentSubtypeForExtracted(kind, extracted = {}) {
 
 export function expectedFieldSpecsForExtracted(kind, extracted = {}) {
   if (kind === 'credit_card_statement') {
+    if (extracted.schema === 'amex_account_activity_mx' || extracted.documentSubtype === 'credit_card_statement.card_activity') {
+      return fields(['cardActivityRows', 'cardActivityDates', 'cardActivityDescriptions', 'cardActivityAmounts', 'cardActivityCurrency'])
+    }
     return fields([
       'cutoffDate',
       'dueDate',

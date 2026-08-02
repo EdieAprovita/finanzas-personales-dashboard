@@ -296,12 +296,13 @@ function pdfLayoutText(textContent) {
 
 export async function inspectPdf(path) {
   const bytes = new Uint8Array(readFileSync(path))
-  const pdf = await getDocument({ data: bytes, disableWorker: true }).promise
+  const standardFontDataUrl = `${process.cwd()}/node_modules/pdfjs-dist/standard_fonts/`
+  const pdf = await getDocument({ data: bytes, disableWorker: true, standardFontDataUrl }).promise
   let chars = 0
   let textValue = ''
   let layoutLines = 0
   let textItems = 0
-  const pageLimit = Math.min(pdf.numPages, 8)
+  const pageLimit = pdf.numPages
   for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber)
     const text = await page.getTextContent()

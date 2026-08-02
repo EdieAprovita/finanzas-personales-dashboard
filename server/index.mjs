@@ -20,6 +20,13 @@ function isLocalDevelopmentHost(hostname) {
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
 }
 
+function isPrivateLanHost(hostname) {
+  const octets = hostname.split('.').map((value) => Number(value))
+  if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return false
+  const [first, second] = octets
+  return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168)
+}
+
 function isAllowedOrigin(origin) {
   if (!origin) return !lanMode
   if (configuredOrigins.has(origin)) return true
@@ -28,7 +35,7 @@ function isAllowedOrigin(origin) {
     const url = new URL(origin)
     if (url.protocol !== 'http:') return false
     const hostname = url.hostname.toLowerCase()
-    return isLocalDevelopmentHost(hostname) && (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1')
+    return isLocalDevelopmentHost(hostname) || (lanMode && isPrivateLanHost(hostname))
   } catch {
     return false
   }
@@ -71,8 +78,19 @@ function listProfiles() {
   return database
     .prepare('SELECT data_json FROM profiles ORDER BY updated_at DESC')
     .all()
-    .map(rowToProfile)
-    .map(migrateProfile)
+    .flatMap((row) => {
+      try {
+        const parsed = financialProfileSchema.safeParse(migrateProfile(rowToProfile(row)))
+        if (!parsed.success) {
+          console.warn('Perfil almacenado omitido por no cumplir el esquema financiero.')
+          return []
+        }
+        return [parsed.data]
+      } catch {
+        console.warn('Perfil almacenado omitido por JSON invalido.')
+        return []
+      }
+    })
 }
 
 function upsertProfile(profile) {
@@ -227,7 +245,8 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'DELETE' && url.pathname.startsWith('/api/profiles/')) {
       const id = decodeURIComponent(url.pathname.split('/').at(-1) ?? '')
-      database.prepare('DELETE FROM profiles WHERE id = ?').run(id)
+      const result = database.prepare('DELETE FROM profiles WHERE id = ?').run(id)
+      if (result.changes === 0) return send(res, 404, { error: 'Perfil no encontrado.' }, origin)
       writeAudit('profile', id, 'delete', {})
       return send(res, 200, { ok: true }, origin)
     }
@@ -253,7 +272,10 @@ const server = createServer(async (req, res) => {
   } catch (error) {
     if (error?.code === 'PAYLOAD_TOO_LARGE') return send(res, 413, { error: 'El cuerpo excede el limite permitido.' }, origin)
     if (error instanceof SyntaxError) return send(res, 400, { error: 'JSON invalido.' }, origin)
-    if (error?.name === 'ZodError') return send(res, 400, { error: 'Perfil invalido.' }, origin)
+    if (error?.name === 'ZodError') {
+      const errorMessage = url.pathname === '/api/knowledge/explain' ? 'Solicitud de explicacion invalida.' : url.pathname.startsWith('/api/profiles') ? 'Perfil invalido.' : 'Solicitud invalida.'
+      return send(res, 400, { error: errorMessage }, origin)
+    }
     const errorId = randomUUID()
     console.error(`API error ${errorId}`, error)
     return send(res, 500, { error: `Error interno. Referencia: ${errorId}` }, origin)

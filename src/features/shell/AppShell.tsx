@@ -9,18 +9,20 @@ import {
   Target,
   Upload,
 } from 'lucide-react'
+import { lazy, Suspense } from 'react'
 import type { FinancialMetrics } from '../../domain/finance'
 import type { FinancialProfile } from '../../domain/types'
-import { Capture } from '../capture/Capture'
 import type { GoalFormState } from '../goals/goalFormModel'
-import { Dashboard } from '../dashboard/Dashboard'
-import { Imports } from '../imports/Imports'
-import { KnowledgeMatrix } from '../knowledge/KnowledgeMatrix'
-import { Planning } from '../planning/Planning'
-import { PrivacyPanel } from '../privacy/PrivacyPanel'
 import { CreateProfileDialog, type CreateProfileMode } from '../profiles/CreateProfileDialog'
 import { ActiveProfileBar, EmptyProfilesState, ProfileSwitcher } from '../profiles/ProfileManagement'
 import { profileDisplayName, profileOptionLabel } from '../profiles/profileSummary'
+
+const Capture = lazy(() => import('../capture/Capture').then(({ Capture: Component }) => ({ default: Component })))
+const Dashboard = lazy(() => import('../dashboard/Dashboard').then(({ Dashboard: Component }) => ({ default: Component })))
+const Imports = lazy(() => import('../imports/Imports').then(({ Imports: Component }) => ({ default: Component })))
+const KnowledgeMatrix = lazy(() => import('../knowledge/KnowledgeMatrix').then(({ KnowledgeMatrix: Component }) => ({ default: Component })))
+const Planning = lazy(() => import('../planning/Planning').then(({ Planning: Component }) => ({ default: Component })))
+const PrivacyPanel = lazy(() => import('../privacy/PrivacyPanel').then(({ PrivacyPanel: Component }) => ({ default: Component })))
 
 export type AppTab = 'profiles' | 'dashboard' | 'capture' | 'planning' | 'imports' | 'knowledge' | 'privacy' | 'more'
 
@@ -319,51 +321,53 @@ export function MainAppShell({
 
         <ProfileCreationSlot creation={creation} />
 
-        {activeTab === 'dashboard' && (
-          <Dashboard
-            profile={currentProfile}
-            metrics={metrics}
-            reportingPeriod={reportingPeriod}
-            onReportingPeriodChange={onReportingPeriodChange}
-            onStartCapture={() => onSwitchTab('capture')}
-            onCreateFromDocuments={() => onSwitchTab('imports')}
-            onOpenPlanning={() => onSwitchTab('planning')}
-          />
-        )}
-        {activeTab === 'capture' && <Capture profile={currentProfile} asOfDate={asOfDate} onChange={onUpdateProfile} />}
-        {activeTab === 'planning' && <Planning profile={currentProfile} metrics={metrics} onCreateGoal={onCreateGoalFromPlanning} />}
-        {activeTab === 'imports' && (
-          <Imports
-            profile={currentProfile}
-            importMessage={importMessage}
-            isImporting={isImporting}
-            importQueue={importQueue}
-            onFiles={onFiles}
-            onReanalyzePersistedDocuments={onReanalyzePersistedDocuments}
-            onApplyReviewedDocumentMovements={onApplyReviewedDocumentMovements}
-          />
-        )}
-        {activeTab === 'more' && (
-          <section className="panel more-panel">
-            <div className="panel-heading">
-              <div>
-                <h2>Más herramientas</h2>
-                <p>Consulta conceptos financieros y revisa cómo se guardan tus datos locales.</p>
+        <Suspense fallback={<section className="panel loading-panel" role="status">Cargando vista...</section>}>
+          {activeTab === 'dashboard' && (
+            <Dashboard
+              profile={currentProfile}
+              metrics={metrics}
+              reportingPeriod={reportingPeriod}
+              onReportingPeriodChange={onReportingPeriodChange}
+              onStartCapture={() => onSwitchTab('capture')}
+              onCreateFromDocuments={() => onSwitchTab('imports')}
+              onOpenPlanning={() => onSwitchTab('planning')}
+            />
+          )}
+          {activeTab === 'capture' && <Capture profile={currentProfile} asOfDate={asOfDate} onChange={onUpdateProfile} />}
+          {activeTab === 'planning' && <Planning profile={currentProfile} metrics={metrics} onCreateGoal={onCreateGoalFromPlanning} />}
+          {activeTab === 'imports' && (
+            <Imports
+              profile={currentProfile}
+              importMessage={importMessage}
+              isImporting={isImporting}
+              importQueue={importQueue}
+              onFiles={onFiles}
+              onReanalyzePersistedDocuments={onReanalyzePersistedDocuments}
+              onApplyReviewedDocumentMovements={onApplyReviewedDocumentMovements}
+            />
+          )}
+          {activeTab === 'more' && (
+            <section className="panel more-panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Más herramientas</h2>
+                  <p>Consulta conceptos financieros y revisa cómo se guardan tus datos locales.</p>
+                </div>
+                <Ellipsis size={22} />
               </div>
-              <Ellipsis size={22} />
-            </div>
-            <div className="empty-actions">
-              <button type="button" className="ghost" onClick={() => onSwitchTab('knowledge')}>
-                <BookOpen size={18} /> Matriz financiera
-              </button>
-              <button type="button" className="ghost" onClick={() => onSwitchTab('privacy')}>
-                <ShieldCheck size={18} /> Privacidad
-              </button>
-            </div>
-          </section>
-        )}
-        {activeTab === 'knowledge' && <KnowledgeMatrix />}
-        {activeTab === 'privacy' && <PrivacyPanel />}
+              <div className="empty-actions">
+                <button type="button" className="ghost" onClick={() => onSwitchTab('knowledge')}>
+                  <BookOpen size={18} /> Matriz financiera
+                </button>
+                <button type="button" className="ghost" onClick={() => onSwitchTab('privacy')}>
+                  <ShieldCheck size={18} /> Privacidad
+                </button>
+              </div>
+            </section>
+          )}
+          {activeTab === 'knowledge' && <KnowledgeMatrix />}
+          {activeTab === 'privacy' && <PrivacyPanel />}
+        </Suspense>
       </section>
     </main>
   )

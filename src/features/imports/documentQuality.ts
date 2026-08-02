@@ -74,6 +74,7 @@ export interface DocumentRiskProfile {
 
 export interface DocumentCaptureGap {
   kind: DocumentKind
+  subtypeKey: string
   label: string
   totalDocuments: number
   legacyDocuments: number
@@ -91,6 +92,7 @@ export interface DocumentCaptureReadiness {
   rawFilesPersisted: boolean
   currentSchemaDocuments: number
   legacyDocuments: number
+  incompleteDocuments: number
   reimportRecommended: number
   headline: string
 }
@@ -242,7 +244,7 @@ export function documentQualitySummary(doc: ImportedDocument): DocumentQualitySu
   }
 }
 
-function derivedCaptureFor(kind: DocumentKind, documents: ImportedDocument[]): DocumentCaptureGap | null {
+function derivedCaptureFor(kind: DocumentKind, subtypeKey: string, label: string, documents: ImportedDocument[]): DocumentCaptureGap | null {
   const documentSpecs = documents.map((doc) => ({
     doc,
     specs: expectedFieldSpecsForExtracted(kind, doc.extracted ?? {}),
@@ -270,7 +272,8 @@ function derivedCaptureFor(kind: DocumentKind, documents: ImportedDocument[]): D
 
   return {
     kind,
-    label: documentKindLabels[kind],
+    subtypeKey,
+    label,
     totalDocuments: documents.length,
     legacyDocuments,
     detectedFields,
@@ -281,8 +284,17 @@ function derivedCaptureFor(kind: DocumentKind, documents: ImportedDocument[]): D
 }
 
 function analyzeCaptureGaps(groups: Record<DocumentKind, ImportedDocument[]>) {
-  return (Object.entries(groups) as Array<[DocumentKind, ImportedDocument[]]>)
-    .map(([kind, rows]) => derivedCaptureFor(kind, rows))
+  const subtypeGroups = new Map<string, { kind: DocumentKind; label: string; documents: ImportedDocument[] }>()
+  for (const [kind, rows] of Object.entries(groups) as Array<[DocumentKind, ImportedDocument[]]>) {
+    for (const document of rows) {
+      const subtype = documentSubtypeForExtracted(kind, document.extracted ?? {})
+      const current = subtypeGroups.get(subtype.key) ?? { kind, label: subtype.label, documents: [] }
+      current.documents.push(document)
+      subtypeGroups.set(subtype.key, current)
+    }
+  }
+  return [...subtypeGroups.entries()]
+    .map(([subtypeKey, group]) => derivedCaptureFor(group.kind, subtypeKey, group.label, group.documents))
     .filter((gap): gap is DocumentCaptureGap => Boolean(gap))
     .sort((a, b) => b.legacyDocuments - a.legacyDocuments || a.completeness - b.completeness || b.totalDocuments - a.totalDocuments)
 }
@@ -290,23 +302,26 @@ function analyzeCaptureGaps(groups: Record<DocumentKind, ImportedDocument[]>) {
 function analyzeCaptureReadiness(documents: ImportedDocument[]): DocumentCaptureReadiness {
   const legacyDocuments = documents.filter((doc) => !currentSchemaDocument(doc) && expectedFieldSpecsForExtracted(doc.kind ?? 'unknown', doc.extracted ?? {}).length > 0).length
   const currentSchemaDocuments = documents.filter(currentSchemaDocument).length
-  const reimportRecommended = documents.filter((doc) => documentQualitySummary(doc).status === 'legacy' || documentQualitySummary(doc).status === 'incomplete').length
+  const incompleteDocuments = documents.filter((doc) => documentQualitySummary(doc).status === 'incomplete').length
+  const reimportRecommended = legacyDocuments
   const headline = legacyDocuments
-    ? `${legacyDocuments} documento(s) fueron importados antes del esquema de calidad actual.`
-    : reimportRecommended
-      ? `${reimportRecommended} documento(s) necesitan completar campos clave.`
+    ? `${legacyDocuments} documento(s) fueron importados antes del esquema de calidad actual y requieren volver a subir el archivo original.`
+    : incompleteDocuments
+      ? `${incompleteDocuments} documento(s) tienen campos incompletos; revisa la fuente o agrega un documento compatible.`
       : 'Los documentos importados tienen metadata de calidad actual.'
 
   return {
     rawFilesPersisted: false,
     currentSchemaDocuments,
     legacyDocuments,
+    incompleteDocuments,
     reimportRecommended,
     headline,
   }
 }
 
 function improvementActionForGap(gap: DocumentCaptureGap) {
+  if (gap.subtypeKey === 'credit_card_statement.card_activity') return 'Validar fechas, descripciones, montos y moneda de la actividad; el CSV no sustituye el estado con saldo, corte y limite.'
   if (gap.kind === 'credit_card_statement') return 'Reimportar estados de tarjeta y validar corte, saldo, pagos, cargos y conciliacion.'
   if (gap.kind === 'bank_statement') return 'Reimportar estados bancarios o ahorro para separar depositos, retiros, saldos y SPEI.'
   if (gap.kind === 'payroll_cfdi') return 'Reimportar XML/PDF de nomina para recuperar periodo, percepciones, deducciones y dias pagados.'
@@ -508,7 +523,10 @@ export function analyzeDocumentQuality(profile: FinancialProfile): DocumentQuali
       ...captureGaps
         .filter((gap) => gap.legacyDocuments > 0 || gap.completeness < 0.7)
         .slice(0, 2)
-        .map((gap) => `${gap.label}: ${gap.legacyDocuments || gap.totalDocuments} documento(s) necesitan reimportacion o extraccion ampliada para ${gap.missingFields.slice(0, 3).map((field) => field.label).join(', ')}.`),
+        .map((gap) => {
+          const action = gap.legacyDocuments > 0 ? `${gap.legacyDocuments} documento(s) legacy requieren reimportacion` : `${gap.totalDocuments} documento(s) tienen campos incompletos`
+          return `${gap.label}: ${action} para ${gap.missingFields.slice(0, 3).map((field) => field.label).join(', ')}.`
+        }),
       ...buckets.map(actionForBucket),
     ].filter((action): action is string => Boolean(action)).slice(0, 4),
     risk: analyzeDocumentRisk(profile),
@@ -534,7 +552,20 @@ export function reanalyzePersistedDocuments(profile: FinancialProfile): Persiste
     if (before.status === 'legacy') legacyDocuments += 1
 
     const kind = doc.kind ?? 'unknown'
-    const extracted = doc.extracted ?? {}
+    const rawExtracted = doc.extracted ?? {}
+    const isCardActivity = rawExtracted.schema === 'amex_account_activity_mx'
+    const persistedActivityRows = numericExtracted(doc, 'cardActivityRows') || numericExtracted(doc, 'appliedRows') || numericExtracted(doc, 'rows')
+    const persistedActivityDates = numericExtracted(doc, 'cardActivityDates') || Math.max(0, persistedActivityRows - numericExtracted(doc, 'skippedRows'))
+    const extracted = isCardActivity
+      ? {
+          ...rawExtracted,
+          cardActivityRows: persistedActivityRows,
+          cardActivityDates: persistedActivityDates,
+          cardActivityDescriptions: numericExtracted(doc, 'cardActivityDescriptions') || persistedActivityRows,
+          cardActivityAmounts: numericExtracted(doc, 'cardActivityAmounts') || persistedActivityRows,
+          cardActivityCurrency: rawExtracted.cardActivityCurrency ?? rawExtracted.detectedCurrency ?? 'MXN',
+        }
+      : rawExtracted
     const subtype = documentSubtypeForExtracted(kind, extracted)
     const specs = expectedFieldSpecsForExtracted(kind, extracted)
     const missingFields = specs.filter((field) => !extractedValuePopulated(extracted[field.key])).map((field) => field.key)
@@ -554,7 +585,8 @@ export function reanalyzePersistedDocuments(profile: FinancialProfile): Persiste
       detectedFields,
       missingFields,
       qualityScore,
-      requiresRawReimport: missingFields.length > 0,
+      requiresRawReimport: before.status === 'legacy',
+      fieldsIncomplete: missingFields.length > 0,
       reanalysis: {
         analyzedAt,
         method: 'persisted-extracted-metadata',
@@ -569,7 +601,8 @@ export function reanalyzePersistedDocuments(profile: FinancialProfile): Persiste
       numericExtracted(doc, 'expectedFields') !== expectedFields ||
       numericExtracted(doc, 'detectedFields') !== detectedFields ||
       JSON.stringify(stringArrayExtracted(doc, 'missingFields')) !== JSON.stringify(missingFields) ||
-      stringExtracted(doc, 'documentSubtype') !== subtype.key
+      stringExtracted(doc, 'documentSubtype') !== subtype.key ||
+      booleanExtracted(doc, 'requiresRawReimport') !== (before.status === 'legacy')
 
     if (changed) changedDocuments += 1
     return changed ? { ...doc, extracted: nextExtracted } : doc
@@ -583,7 +616,7 @@ export function reanalyzePersistedDocuments(profile: FinancialProfile): Persiste
 
   const summary =
     changedDocuments > 0
-      ? `Reanalisis local actualizado en ${changedDocuments} documento(s). ${incompleteDocuments} documento(s) siguen requiriendo reimportacion para completar campos no persistidos.`
+      ? `Reanalisis local actualizado en ${changedDocuments} documento(s). ${legacyDocuments} legacy requieren volver a subir el archivo y ${incompleteDocuments} documento(s) tienen campos incompletos.`
       : `Los ${profile.importedDocuments.length} documento(s) ya estaban alineados con la matriz actual.`
 
   return {

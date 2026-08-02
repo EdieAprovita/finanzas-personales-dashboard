@@ -200,6 +200,16 @@ test('rejects malformed, oversized, and non-local API requests', async ({ page }
     data: { text: 'x'.repeat(2 * 1024 * 1024) },
   })
   expect(oversizedPayload.status()).toBe(413)
+
+  const invalidKnowledge = await page.request.post('/api/knowledge/explain', {
+    data: { text: 42 },
+  })
+  expect(invalidKnowledge.status()).toBe(400)
+  expect(invalidKnowledge.headers()['content-type']).toMatch(/application\/json/)
+  expect((await invalidKnowledge.json()).error).toBe('Solicitud de explicacion invalida.')
+
+  const missingProfile = await page.request.delete('/api/profiles/profile-that-does-not-exist')
+  expect(missingProfile.status()).toBe(404)
 })
 
 test('creates a profile and deletes it individually with confirmation', async ({ page }) => {
@@ -301,6 +311,12 @@ test('creates a manual profile and captures an account plus movement', async ({ 
   await dialog.getByRole('button', { name: /Crear y capturar datos/i }).click()
 
   await expect(page.getByRole('heading', { name: 'Crear meta' })).toBeVisible()
+  const captureTaskTabs = page.locator('.capture-task-tabs')
+  if (await captureTaskTabs.isVisible()) {
+    await expect(captureTaskTabs.getByRole('button')).toHaveCount(4)
+    await captureTaskTabs.getByRole('button', { name: /Movimiento/i }).click()
+    await expect(page.locator('#capture-movement')).toBeInViewport()
+  }
   const accountPanel = page.locator('.capture-card').filter({ has: page.getByRole('heading', { name: 'Agregar cuenta o deuda' }) })
   await accountPanel.getByLabel('Nombre').fill('E2E Cuenta Nomina')
   await accountPanel.getByLabel('Saldo actual').fill('25000')
@@ -316,6 +332,7 @@ test('creates a manual profile and captures an account plus movement', async ({ 
   await page.getByRole('button', { name: 'Estado actual' }).click()
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('E2E Perfil captura')
   await expect(page.locator('.kpi', { hasText: 'Score Finanzas OS' })).toBeVisible()
+  await expect(page.getByText('Ver datos en tabla').first()).toBeVisible()
 
   await page.getByRole('button', { name: 'Movimientos' }).click()
   await expect(page.getByRole('heading', { name: 'Crear meta' })).toBeVisible()
@@ -534,7 +551,7 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   }
   await expect(page.getByText(/Vista protegida: nombres de archivo/i)).toBeVisible()
   await expect(page.getByLabel('Plan de mejora de datos documentales')).toBeVisible()
-  await expect(page.getByText('Reimportar primero')).toBeVisible()
+  await expect(page.getByText('Prioridad de captura')).toBeVisible()
   await expect(page.locator('[data-testid="document-detail-table"][open]')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /Reanalizar documentos guardados/i })).toBeVisible()
   await page.getByRole('button', { name: /Reanalizar documentos guardados/i }).click()
@@ -694,6 +711,12 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
     profile.importedDocuments.some((document) => document.fileName === 'e2e-estado-cuenta-nomina.csv'),
   )
   expect(importedProfile).toBeTruthy()
+  const activityDocument = importedProfile?.importedDocuments.find((document) => document.fileName === 'e2e-movimientos.csv')
+  expect(activityDocument?.extracted?.schema).toBe('amex_account_activity_mx')
+  expect(activityDocument?.extracted?.documentSubtype).toBe('credit_card_statement.card_activity')
+  expect(activityDocument?.extracted?.cardActivityRows).toBe(3)
+  expect(activityDocument?.extracted?.cardActivityDates).toBe(3)
+  expect(activityDocument?.extracted?.cardActivityAmounts).toBe(3)
   const payrollIncomeTransactions =
     importedProfile?.transactions.filter(
       (transaction) =>
@@ -919,6 +942,18 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   expect(approvedCardProfile?.debts).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ balance: 5100, creditLimit: 120000, minimumPayment: 1250, dueDate: '2026-07-05' }),
+    ]),
+  )
+  expect(approvedCardProfile?.monthlySnapshots).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        month: '2026-06',
+        debtBalance: 5100,
+        debtMinimumPayments: 1250,
+        cardBalance: 5100,
+        cardLimit: 120000,
+        sourceDocumentIds: expect.arrayContaining([approvedCardDocument?.id]),
+      }),
     ]),
   )
   const gbmOperationsCsvDocument = importedProfile?.importedDocuments.find((document) => document.fileName === 'operaciones-gbm-demo.csv')

@@ -137,17 +137,18 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
     const previousTransaction = profile.transactions.find((row) => row.id === editingTransactionId)
     const baseProfile = previousTransaction?.isManual ? reverseManualTransaction(profile, previousTransaction) : profile
     const signedAmount = transaction.type === 'income' ? amount : -amount
+    const finalCategory = transaction.type === 'debt_payment' ? 'Pago de deuda' : transaction.category.trim() || 'Sin categoria'
     const nextTransaction: Transaction = {
       id: editingTransactionId || `tx-${Date.now()}`,
       date: transaction.date,
       amount: signedAmount,
       merchant: transaction.merchant.trim(),
-      category: transaction.type === 'debt_payment' ? 'Pago de deuda' : transaction.category.trim() || 'Sin categoria',
+      category: finalCategory,
       accountId: sourceAccount.id,
       debtId: transaction.type === 'debt_payment' ? debt?.id : undefined,
       type: transaction.type,
       isManual: true,
-      isEssential: ['Vivienda', 'Supermercado', 'Transporte', 'Salud'].includes(transaction.category),
+      isEssential: transaction.type === 'expense' && ['Vivienda', 'Supermercado', 'Transporte', 'Salud'].includes(finalCategory),
     }
     const accounts = baseProfile.accounts.map((row) => {
       if (row.id === sourceAccount.id) return { ...row, balance: row.balance + signedAmount }
@@ -211,7 +212,8 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
   }
 
   function removeAccount(row: Account): void {
-    if (profile.transactions.some((transactionRow) => transactionRow.accountId === row.id)) {
+    const linkedDebtIds = new Set(profile.debts.filter((debt) => debt.accountId === row.id).map((debt) => debt.id))
+    if (profile.transactions.some((transactionRow) => transactionRow.accountId === row.id || (transactionRow.debtId && linkedDebtIds.has(transactionRow.debtId)))) {
       setMessage('No puedes eliminar una cuenta con movimientos. Elimina o corrige sus movimientos primero.')
       return
     }
@@ -233,9 +235,20 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
     })
   }
 
+  function scrollToCaptureTask(taskId: string): void {
+    document.getElementById(taskId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   return (
-    <div className="capture-grid">
-      <section className="panel capture-card">
+    <div className="capture-flow">
+      <nav className="capture-task-tabs" aria-label="Tareas de captura">
+        <button type="button" onClick={() => scrollToCaptureTask('capture-account')}><Landmark size={15} /> Cuenta</button>
+        <button type="button" onClick={() => scrollToCaptureTask('capture-movement')}><CircleDollarSign size={15} /> Movimiento</button>
+        <button type="button" onClick={() => scrollToCaptureTask('capture-goal')}><Target size={15} /> Meta</button>
+        <button type="button" onClick={() => scrollToCaptureTask('capture-history')}><Pencil size={15} /> Revisar</button>
+      </nav>
+      <div className="capture-grid">
+      <section id="capture-account" className="panel capture-card">
         <div className="panel-heading">
           <div>
             <h2>{editingAccountId ? 'Editar cuenta o deuda' : 'Agregar cuenta o deuda'}</h2>
@@ -255,7 +268,7 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
         {editingAccountId && <button type="button" className="ghost" onClick={resetAccountForm}>Cancelar edición</button>}
       </section>
 
-      <section className="panel capture-card">
+      <section id="capture-movement" className="panel capture-card">
         <div className="panel-heading">
           <div><h2>{editingTransactionId ? 'Editar movimiento' : 'Registrar movimiento'}</h2><p>Los pagos reducen efectivo y deuda; las compras con tarjeta aumentan la deuda.</p></div>
           <CircleDollarSign size={22} />
@@ -272,21 +285,22 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
         <button type="button" className="action-button" onClick={addTransaction} disabled={transaction.type === 'debt_payment' ? !paymentAccounts.length || !profile.debts.length : !profile.accounts.length}><Plus size={18} /> {editingTransactionId ? 'Guardar movimiento' : 'Guardar movimiento'}</button>
       </section>
 
-      <section className="panel capture-card wide goal-capture-card">
+      <section id="capture-goal" className="panel capture-card wide goal-capture-card">
         <div className="panel-heading"><div><h2>{editingGoalId ? 'Editar meta' : 'Crear meta'}</h2><p>Define una prioridad de ahorro, viaje, compra, inmueble, auto, emergencia o deuda.</p></div><Target size={22} /></div>
         <GoalForm goal={goal} error={goalError} asOfDate={asOfDate} onChange={(next) => { setGoal(next); setGoalError('') }} />
         <button type="button" className="action-button" onClick={saveGoal}><Plus size={18} /> {editingGoalId ? 'Guardar meta' : 'Guardar meta'}</button>
       </section>
 
-      <section className="panel wide recent-ledger">
+      <section id="capture-history" className="panel wide recent-ledger">
         <div className="panel-heading"><div><h2>Datos recientes</h2><p>Edita o elimina los registros manuales antes de confiar en el dashboard.</p></div></div>
-        {message && <p className="profile-message">{message}</p>}
+        {message && <p className="profile-message" role="status" aria-live="polite">{message}</p>}
         <div className="recent-ledger-grid">
           <article><h3>Cuentas</h3>{profile.accounts.map((row) => <div key={row.id}><span>{row.name} · {mxn(row.balance)}</span><button type="button" onClick={() => editAccount(row)} aria-label={`Editar ${row.name}`}><Pencil size={15} /></button><button type="button" onClick={() => removeAccount(row)} aria-label={`Eliminar ${row.name}`}><Trash2 size={15} /></button></div>)}</article>
           <article><h3>Movimientos manuales</h3>{profile.transactions.filter((row) => row.isManual).slice(0, 8).map((row) => <div key={row.id}><span>{row.date} · {row.merchant} · {mxn(row.amount)}</span><button type="button" onClick={() => editTransaction(row)} aria-label={`Editar ${row.merchant}`}><Pencil size={15} /></button><button type="button" onClick={() => removeTransaction(row)} aria-label={`Eliminar ${row.merchant}`}><Trash2 size={15} /></button></div>)}</article>
           <article><h3>Metas</h3>{profile.goals.map((row) => <div key={row.id}><span>{row.name} · {mxn(row.targetAmount)}</span><button type="button" onClick={() => editGoal(row)} aria-label={`Editar ${row.name}`}><Pencil size={15} /></button><button type="button" onClick={() => onChange({ ...profile, goals: profile.goals.filter((goalRow) => goalRow.id !== row.id) })} aria-label={`Eliminar ${row.name}`}><Trash2 size={15} /></button></div>)}</article>
         </div>
       </section>
+      </div>
     </div>
   )
 }

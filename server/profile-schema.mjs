@@ -11,6 +11,20 @@ const accountSchema = z.object({
   creditLimit: z.number().finite().nonnegative().optional(),
 })
 
+const investmentPositionSchema = z.object({
+  id: z.string().min(1).max(240),
+  accountId: z.string().min(1).max(160),
+  name: z.string().min(1).max(240),
+  instrumentType: z.string().max(160).optional(),
+  quantity: z.number().finite().nonnegative().optional(),
+  price: z.number().finite().nonnegative().optional(),
+  marketValue: z.number().finite().nonnegative(),
+  currency: currencySchema,
+  unrealizedGain: z.number().finite().optional(),
+  asOfDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  sourceDocumentId: z.string().max(240).optional(),
+})
+
 const transactionSchema = z.object({
   id: z.string().min(1).max(160),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -65,6 +79,12 @@ const snapshotSchema = z.object({
   debtPayments: z.number().finite().nonnegative(),
   savings: z.number().finite(),
   netWorth: z.number().finite(),
+  liquidCash: z.number().finite().nonnegative().optional(),
+  debtBalance: z.number().finite().nonnegative().optional(),
+  debtMinimumPayments: z.number().finite().nonnegative().optional(),
+  cardBalance: z.number().finite().nonnegative().optional(),
+  cardLimit: z.number().finite().nonnegative().optional(),
+  sourceDocumentIds: z.array(z.string().min(1).max(240)).max(100).optional(),
 })
 
 const importedDocumentSchema = z.object({
@@ -101,6 +121,7 @@ export const financialProfileSchema = z.object({
   budgets: z.array(z.object({ category: z.string().min(1).max(160), monthlyLimit: z.number().finite().nonnegative() })).max(1000),
   monthlySnapshots: z.array(snapshotSchema).max(1200),
   importedDocuments: z.array(importedDocumentSchema).max(10000),
+  investmentPositions: z.array(investmentPositionSchema).max(10000),
 })
 
 export const knowledgeExplainRequestSchema = z.object({
@@ -116,6 +137,36 @@ function normalizedName(value) {
     .trim()
 }
 
+function finiteNumber(value) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : 0
+}
+
+function migrateImportedDocument(document) {
+  const extracted = document?.extracted && typeof document.extracted === 'object' ? document.extracted : {}
+  if (extracted.schema !== 'amex_account_activity_mx') return document
+  const rows = finiteNumber(extracted.cardActivityRows) || finiteNumber(extracted.rows) || finiteNumber(extracted.appliedRows)
+  const usableRows = Math.max(0, rows - finiteNumber(extracted.skippedRows))
+  const complete = rows > 0 && usableRows > 0
+  return {
+    ...document,
+    extracted: {
+      ...extracted,
+      documentSubtype: 'credit_card_statement.card_activity',
+      documentSubtypeLabel: 'Actividad de tarjeta',
+      cardActivityRows: rows,
+      cardActivityDates: finiteNumber(extracted.cardActivityDates) || usableRows,
+      cardActivityDescriptions: finiteNumber(extracted.cardActivityDescriptions) || usableRows,
+      cardActivityAmounts: finiteNumber(extracted.cardActivityAmounts) || usableRows,
+      cardActivityCurrency: extracted.cardActivityCurrency ?? extracted.detectedCurrency ?? 'MXN',
+      expectedFields: 5,
+      detectedFields: complete ? 5 : 0,
+      missingFields: complete ? [] : ['cardActivityRows', 'cardActivityDates', 'cardActivityDescriptions', 'cardActivityAmounts', 'cardActivityCurrency'],
+      qualityScore: complete ? 1 : 0.05,
+    },
+  }
+}
+
 export function migrateProfile(rawProfile) {
   const profile = { ...rawProfile }
   const accounts = Array.isArray(profile.accounts) ? profile.accounts : []
@@ -124,6 +175,8 @@ export function migrateProfile(rawProfile) {
     ...profile,
     schemaVersion: 2,
     reportingCurrency: 'MXN',
+    investmentPositions: Array.isArray(profile.investmentPositions) ? profile.investmentPositions : [],
+    importedDocuments: Array.isArray(profile.importedDocuments) ? profile.importedDocuments.map(migrateImportedDocument) : [],
     debts: debts.map((debt) => {
       if (debt.accountId) return { ...debt, currency: debt.currency ?? 'MXN' }
       const account = accounts.find(

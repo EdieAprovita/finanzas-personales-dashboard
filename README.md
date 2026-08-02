@@ -6,7 +6,7 @@ Aplicacion local para centralizar informacion financiera personal, calcular salu
 
 - React 19 + TypeScript + Vite
 - Node 26 `node:sqlite` + API local para persistencia en archivo SQLite
-- Dexie + IndexedDB como fallback del navegador
+- SQLite local como unica fuente de persistencia; no se usa IndexedDB como fallback
 - Recharts para visualizaciones
 - PapaParse + Zod para CSVs de estados de cuenta
 - PDF.js para lectura local de PDFs
@@ -22,9 +22,9 @@ npm run build
 npm run lint
 ```
 
-Para usarla desde tu celular o desde otro navegador en la misma red, deja corriendo `npm run api` en una terminal y `npm run dev:mobile` en otra. Abre la URL LAN que imprime Vite, por ejemplo `http://192.168.x.x:5173/`. El navegador usa rutas `/api`; Vite las reenvia a la API local en tu computadora.
+Para usarla desde tu celular o desde otro navegador en la misma red, deja corriendo `npm run api:lan` en una terminal y `npm run dev:mobile` en otra. Abre la URL LAN que imprime Vite, por ejemplo `http://192.168.x.x:5173/`. El navegador usa rutas `/api`; Vite las reenvia a la API local en tu computadora.
 
-La API solo acepta origenes locales de desarrollo: `localhost`, `127.0.0.1` y las IPs LAN activas de esta Mac. Si cambias de red o cambia la IP de tu Mac, reinicia `npm run api` para que recalcule los origenes permitidos.
+En modo LAN la API escucha en todas las interfaces y acepta orígenes IPv4 privados (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`). Para un hostname o puerto adicional puedes configurar `FINANZAS_ALLOWED_ORIGINS=http://mi-host:5173 npm run api:lan`. CORS no reemplaza autenticacion; usa este modo solo en una red privada confiable y detenlo al terminar.
 
 ## Funcionalidad Implementada
 
