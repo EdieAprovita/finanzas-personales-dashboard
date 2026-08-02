@@ -69,6 +69,11 @@ const extractedFieldLabels: Record<string, string> = {
   cardReconciliationTolerance: 'Tolerancia',
   cardChargesRows: 'Mov. cargo tarjeta',
   cardChargesTotal: 'Cargos visibles',
+  cardActivityRows: 'Mov. actividad',
+  cardActivityDates: 'Fechas actividad',
+  cardActivityDescriptions: 'Descripciones actividad',
+  cardActivityAmounts: 'Montos actividad',
+  cardActivityCurrency: 'Moneda actividad',
   cardCreditsRows: 'Mov. credito tarjeta',
   cardCreditsTotal: 'Creditos visibles',
   cardMovementRowCount: 'Movimientos tarjeta',
@@ -418,6 +423,13 @@ const extractedFieldPriority: Record<string, string[]> = {
   credit_card_statement: [
     'pdfTextMode',
     'pdfTextPagesRead',
+    'pdfSummaryPagesRead',
+    'documentSubtypeLabel',
+    'cardActivityRows',
+    'cardActivityDates',
+    'cardActivityDescriptions',
+    'cardActivityAmounts',
+    'cardActivityCurrency',
     'cutoffDate',
     'dueDate',
     'minimumPayment',
@@ -905,7 +917,7 @@ export function Imports({
         <div className="panel-heading">
           <div>
             <h2>Calidad de extraccion</h2>
-            <p>Cobertura por documento antes de confiar en saldos, ingresos, deuda o inversiones.</p>
+            <p>Completitud de campos detectados; no sustituye la conciliación ni la revisión de datos sensibles.</p>
           </div>
           <Gauge size={24} />
         </div>
@@ -915,7 +927,7 @@ export function Imports({
           <>
             <div className="document-quality-score" aria-label="Cobertura documental">
               <strong>{Math.round(quality.coverageScore * 100)}%</strong>
-              <span>cobertura documental</span>
+              <span>completitud de campos</span>
               <small>
                 {quality.detectedFields}/{quality.expectedFields || 'sin'} campos clave detectados
               </small>
@@ -953,8 +965,12 @@ export function Imports({
                   <dd>{quality.captureReadiness.legacyDocuments}</dd>
                 </div>
                 <div>
-                  <dt>Reimportar</dt>
-                  <dd>{quality.captureReadiness.reimportRecommended}</dd>
+                    <dt>Incompletos</dt>
+                    <dd>{quality.captureReadiness.incompleteDocuments}</dd>
+                  </div>
+                  <div>
+                    <dt>Reimportar legacy</dt>
+                    <dd>{quality.captureReadiness.reimportRecommended}</dd>
                 </div>
               </dl>
               {!quality.captureReadiness.rawFilesPersisted && (
@@ -976,7 +992,7 @@ export function Imports({
                   <dd>{quality.risk.appliedDocuments}</dd>
                 </div>
                 <div>
-                  <dt>Conciliar</dt>
+                  <dt>Pendientes</dt>
                   <dd>{quality.risk.pendingReconciliation}</dd>
                 </div>
                 <div>
@@ -984,7 +1000,7 @@ export function Imports({
                   <dd>{quality.risk.skippedSemanticDuplicates + quality.risk.skippedDuplicateRows}</dd>
                 </div>
                 <div>
-                  <dt>Exactos</dt>
+                  <dt>Duplicados exactos</dt>
                   <dd>{quality.risk.duplicateTransactionFingerprints + quality.risk.duplicateDocumentIds}</dd>
                 </div>
               </dl>
@@ -996,7 +1012,7 @@ export function Imports({
                   <strong>Brechas de captura</strong>
                 </div>
                 {quality.captureGaps.slice(0, 3).map((gap) => (
-                  <article key={gap.kind}>
+                  <article key={gap.subtypeKey}>
                     <div>
                       <span>{gap.label}</span>
                       <strong>{Math.round(gap.completeness * 100)}%</strong>
@@ -1027,7 +1043,7 @@ export function Imports({
               <div className="document-improvement-plan" aria-label="Plan de mejora de datos documentales">
                 <div>
                   <AlertTriangle size={18} />
-                  <strong>Reimportar primero</strong>
+                  <strong>Prioridad de captura</strong>
                 </div>
                 {quality.improvementPlan.map((item) => (
                   <article key={item.label}>
@@ -1152,20 +1168,21 @@ export function Imports({
               const perceptionRows = extractedObjectRows(doc, 'perceptionConcepts')
               const deductionRows = extractedObjectRows(doc, 'deductionConcepts')
               const otherPaymentRows = extractedObjectRows(doc, 'otherPaymentConcepts')
-              const hasReviewedMovementApproval = Boolean(doc.extracted?.reviewedMovementRowsAppliedAt)
+              const hasReviewedMovementApproval = Boolean(doc.extracted?.reviewedMovementRowsAppliedAt || doc.extracted?.reviewedPositionRowsAppliedAt)
               const canApplyStatementMovements = doc.kind === 'bank_statement' && statementMovementRows.length > 0 && !hasReviewedMovementApproval
               const canApplyCardMovements =
                 doc.kind === 'credit_card_statement' &&
                 cardMovementRows.length > 0 &&
                 doc.extracted?.cardReconciliationStatus === 'balanced' &&
                 !hasReviewedMovementApproval
+              const canApplyInvestmentPositions = doc.kind === 'investment_statement' && (positionRows.length > 0 || subaccountRows.length > 0) && !hasReviewedMovementApproval
               const canApplyPayroll =
                 doc.kind === 'payroll_cfdi' &&
                 typeof doc.extracted?.paymentDate === 'string' &&
                 typeof doc.extracted?.netIncome === 'number' &&
                 doc.extracted.netIncome > 0 &&
                 !hasReviewedMovementApproval
-              const canApplyReviewedMovements = canApplyStatementMovements || canApplyCardMovements || canApplyPayroll
+              const canApplyReviewedMovements = canApplyStatementMovements || canApplyCardMovements || canApplyInvestmentPositions || canApplyPayroll
               return (
                 <article
                   key={doc.id}
@@ -1214,13 +1231,15 @@ export function Imports({
                     {canApplyReviewedMovements && (
                       <div className="document-approval-actions">
                         <button type="button" className="ghost primary" onClick={() => onApplyReviewedDocumentMovements(doc.id)}>
-                          <CheckCircle2 size={16} /> {canApplyPayroll ? 'Aplicar nomina revisada' : 'Aplicar movimientos revisados'}
+                          <CheckCircle2 size={16} /> {canApplyInvestmentPositions ? 'Aplicar posiciones revisadas' : canApplyPayroll ? 'Aplicar nomina revisada' : 'Aplicar movimientos revisados'}
                         </button>
                       </div>
                     )}
                     {hasReviewedMovementApproval && (
                       <p className="document-applied-note">
-                        Movimientos PDF aplicados: {formatExtractedValue('reviewedMovementRowsApplied', doc.extracted?.reviewedMovementRowsApplied)}
+                        {doc.extracted?.reviewedPositionRowsAppliedAt
+                          ? `Posiciones aplicadas: ${formatExtractedValue('reviewedPositionRowsApplied', doc.extracted?.reviewedPositionRowsApplied)}`
+                          : `Movimientos PDF aplicados: ${formatExtractedValue('reviewedMovementRowsApplied', doc.extracted?.reviewedMovementRowsApplied)}`}
                       </p>
                     )}
                     <ExtractedDetailTable title="Posiciones detectadas para revisar" rows={positionRows} columns={positionColumns} />

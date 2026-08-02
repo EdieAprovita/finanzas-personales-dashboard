@@ -67,9 +67,20 @@ database.exec(`
 
 function backupAndMigrateLegacyProfiles() {
   const rows = database.prepare('SELECT id, data_json FROM profiles').all()
-  const legacyProfiles = rows
-    .map((row) => ({ id: row.id, profile: JSON.parse(row.data_json) }))
-    .filter(({ profile }) => profile.schemaVersion !== 2 || profile.reportingCurrency !== 'MXN')
+  const parsedProfiles = rows.flatMap((row) => {
+    try {
+      return [{ id: row.id, profile: JSON.parse(row.data_json) }]
+    } catch {
+      return []
+    }
+  })
+  const invalidJsonCount = rows.length - parsedProfiles.length
+  if (invalidJsonCount > 0) {
+    console.warn(`SQLite conserva ${invalidJsonCount} perfil(es) con JSON invalido; se dejan en cuarentena logica.`)
+  }
+  const legacyProfiles = parsedProfiles.filter(
+    ({ profile }) => profile && typeof profile === 'object' && !Array.isArray(profile) && (profile.schemaVersion !== 2 || profile.reportingCurrency !== 'MXN'),
+  )
   if (legacyProfiles.length === 0) return
 
   const backupDirectory = resolve(dirname(dbPath), 'backups')

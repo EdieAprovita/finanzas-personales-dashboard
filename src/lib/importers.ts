@@ -3,10 +3,12 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url'
 import Papa from 'papaparse'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import type { Account, DocumentKind, FinancialProfile, ImportedDocument, Transaction } from '../domain/types'
+import type { Account, DocumentKind, FinancialProfile, ImportedDocument, InvestmentPosition, Transaction } from '../domain/types'
+import { enrichSnapshotsWithDocumentPositions } from '../domain/snapshots'
 import { expectedFieldKeysForExtracted } from './documentFieldSpecs'
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+const standardFontDataUrl = `${import.meta.env.BASE_URL}pdfjs/standard_fonts/`
 
 export interface ImportResult {
   profile: FinancialProfile
@@ -216,6 +218,13 @@ function normalizeDate(value: string) {
     dic: '12',
     diciembre: '12',
   }
+  const monthFirst = raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .match(/^([a-z]{3,10})\s+(\d{1,2}),?\s+(\d{4})/)
+  const monthFirstNumber = monthFirst?.[1] ? monthNames[monthFirst[1]] : undefined
+  if (monthFirst && monthFirstNumber) return validIsoDate(Number(monthFirst[3]), Number(monthFirstNumber), Number(monthFirst[2]))
   const textDate = raw
     .toLowerCase()
     .normalize('NFD')
@@ -368,6 +377,33 @@ function numberFromPatterns(text: string, patterns: RegExp[]) {
 
 function dateFromPatterns(text: string, patterns: RegExp[]) {
   return normalizeDate(firstMatch(text, patterns))
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function labelValueSnippet(text: string, labels: string[], maxLength = 180) {
+  const normalized = normalizeForSearch(text)
+  const labelPattern = labels.map((label) => escapeRegExp(normalizeForSearch(label))).join('|')
+  const match = normalized.match(new RegExp(`(?:${labelPattern})\\s*(?:[:=-]\\s*)?(.{0,${maxLength}})`, 'i'))
+  return match?.[1] ?? ''
+}
+
+function dateFromLabelProximity(text: string, labels: string[]) {
+  const snippet = labelValueSnippet(text, labels)
+  return dateFromPatterns(snippet, [
+    /(\d{4}[-/]\d{1,2}[-/]\d{1,2})/,
+    /(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})/,
+    /(\d{1,2}\s+(?:de\s+)?[a-z]{3,10}\.?\s+(?:de\s+)?\d{4})/,
+    /([a-z]{3,10}\s+\d{1,2},?\s+\d{4})/,
+  ])
+}
+
+function moneyFromLabelProximity(text: string, labels: string[]) {
+  const snippet = labelValueSnippet(text, labels)
+  const value = firstMatch(snippet, [/-?\$?\s*([\d][\d,.]*)/])
+  return value ? parseMoney(value) : undefined
 }
 
 function dateCandidates(text: string) {
@@ -1044,6 +1080,19 @@ function creditCardReconciliationFacts(facts: ExtractedFacts): ExtractedFacts {
   }
 }
 
+const cardFieldAliases = {
+  cutoffDate: ['fecha de corte', 'fecha corte', 'corte al', 'cierre del periodo', 'fecha de facturacion', 'closing date', 'statement closing date'],
+  dueDate: ['fecha limite de pago', 'fecha limite', 'fecha maxima de pago', 'fecha de vencimiento', 'paga a mas tardar', 'pagar antes del', 'payment due date', 'payment due', 'due date'],
+  minimumPayment: ['pago minimo', 'pago minimo requerido', 'pago minimo a cubrir', 'pago minimo a pagar', 'importe minimo a pagar', 'pago requerido', 'minimum payment due', 'minimum payment', 'minimum amount due', 'payment required'],
+  noInterestPayment: ['pago para no generar intereses', 'pago para no generar interes', 'pago para evitar intereses', 'payment to avoid interest', 'amount to avoid interest', 'no interest payment'],
+  creditLimit: ['limite de credito', 'limite credito', 'linea de credito', 'linea de credito autorizada', 'credito autorizado', 'linea autorizada', 'credit limit', 'credit line'],
+  availableCredit: ['credito disponible', 'available credit', 'available balance'],
+  currentBalance: ['saldo al corte', 'saldo actual', 'saldo total', 'saldo final', 'new balance', 'statement balance', 'closing balance'],
+  previousBalance: ['saldo anterior', 'saldo previo', 'previous balance', 'previous statement balance', 'opening balance'],
+  newCharges: ['cargos nuevos', 'total de cargos', 'total cargos', 'compras del periodo', 'compras nuevas', 'new charges', 'total charges', 'purchases'],
+  paymentsAmount: ['total de pagos', 'total pagos', 'pagos y creditos', 'pagos y abonos', 'payments and credits', 'payments & credits', 'total payments'],
+} as const
+
 function extractFinancialDocumentFacts(kind: DocumentKind, text: string): ExtractedFacts {
   const normalized = normalizeForSearch(text)
   const common = cleanFacts({
@@ -1083,25 +1132,25 @@ function extractFinancialDocumentFacts(kind: DocumentKind, text: string): Extrac
     const cardPaymentScenarioFacts = extractCreditCardPaymentScenarioFacts(text)
     const cardFacts = cleanFacts({
       ...common,
-      cutoffDate: dateFromPatterns(normalized, [/fecha\s+de\s+corte[^\d]*(\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4})/]),
-      dueDate: dateFromPatterns(normalized, [/fecha\s+l[ií]mite\s+de\s+pago[^\d]*(\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4})/]),
-      minimumPayment: moneyFromPatterns(normalized, [/pago\s+(?:minimo|m[ií]nimo|requerido\s+minimo)[^\d-]*(-?[\d,.]+)/]),
+      cutoffDate: dateFromPatterns(normalized, [/fecha\s+de\s+corte[^\d]*(\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4})/]) || dateFromLabelProximity(text, [...cardFieldAliases.cutoffDate]),
+      dueDate: dateFromPatterns(normalized, [/fecha\s+l[ií]mite\s+de\s+pago[^\d]*(\d{1,2}[-/\s][a-z0-9\s./-]+?\d{2,4})/]) || dateFromLabelProximity(text, [...cardFieldAliases.dueDate]),
+      minimumPayment: moneyFromPatterns(normalized, [/pago\s+(?:minimo|m[ií]nimo|requerido\s+minimo)[^\d-]*(-?[\d,.]+)/]) ?? moneyFromLabelProximity(text, [...cardFieldAliases.minimumPayment]),
       minimumPaymentWithDeferred: moneyFromPatterns(normalized, [
         /pago\s+m[ií]nimo\s*\+\s*(?:compras|cargos|pagos)\s+diferid[oa]s?[^\d-]*(-?[\d,.]+)/,
         /m[ií]nimo\s+(?:con|mas|\+)\s+(?:msi|diferid[oa]s?)[^\d-]*(-?[\d,.]+)/,
       ]),
-      noInterestPayment: moneyFromPatterns(normalized, [/pago\s+para\s+no\s+generar\s+inter[eé]s(?:es)?[^\d-]*(-?[\d,.]+)/]),
-      creditLimit: moneyFromPatterns(normalized, [/l[ií]mite\s+de\s+cr[eé]dito[^\d-]*(-?[\d,.]+)/]),
-      availableCredit: moneyFromPatterns(normalized, [/cr[eé]dito\s+disponible[^\d-]*(-?[\d,.]+)/]),
-      currentBalance: moneyFromPatterns(normalized, [/saldo\s+(?:al\s+corte|actual|total)[^\d-]*(-?[\d,.]+)/]),
-      totalDebtBalance: moneyFromPatterns(normalized, [/saldo\s+deudor\s+total[^\d-]*(-?[\d,.]+)/]),
-      previousBalance: moneyFromPatterns(normalized, [/saldo\s+(?:anterior|previo)[^\d-]*(-?[\d,.]+)/]),
-      newCharges: moneyFromPatterns(normalized, [/(?:total\s+de\s+)?(?:cargos|compras)[^\d-]*(-?[\d,.]+)/]),
+      noInterestPayment: moneyFromPatterns(normalized, [/pago\s+para\s+no\s+generar\s+inter[eé]s(?:es)?[^\d-]*(-?[\d,.]+)/]) ?? moneyFromLabelProximity(text, [...cardFieldAliases.noInterestPayment]),
+      creditLimit: moneyFromPatterns(normalized, [/l[ií]mite\s+de\s+cr[eé]dito[^\d-]*(-?[\d,.]+)/]) ?? moneyFromLabelProximity(text, [...cardFieldAliases.creditLimit]),
+      availableCredit: moneyFromPatterns(normalized, [/cr[eé]dito\s+disponible[^\d-]*(-?[\d,.]+)/]) ?? moneyFromLabelProximity(text, [...cardFieldAliases.availableCredit]),
+      currentBalance: moneyFromPatterns(normalized, [/saldo\s+(?:al\s+corte|actual|total)[^\d-]*(-?[\d,.]+)/]) ?? moneyFromLabelProximity(text, [...cardFieldAliases.currentBalance]),
+      totalDebtBalance: moneyFromPatterns(normalized, [/saldo\s+deudor\s+total[^\d-]*(-?[\d,.]+)/]) ?? moneyFromLabelProximity(text, [...cardFieldAliases.currentBalance]),
+      previousBalance: moneyFromPatterns(normalized, [/saldo\s+(?:anterior|previo)[^\d-]*(-?[\d,.]+)/]) ?? moneyFromLabelProximity(text, [...cardFieldAliases.previousBalance]),
+      newCharges: moneyFromPatterns(normalized, [/(?:total\s+de\s+)?(?:cargos|compras)[^\d-]*(-?[\d,.]+)/]) ?? moneyFromLabelProximity(text, [...cardFieldAliases.newCharges]),
       deferredAmortization: moneyFromPatterns(normalized, [
         /(?:cargos|compras|amortizaci[oó]n)\s+diferid[oa]s?[^\d-]*(-?[\d,.]+)/,
         /parcialidades?[^\d-]*(-?[\d,.]+)/,
       ]),
-      paymentsAmount: moneyFromPatterns(normalized, [/(?:total\s+de\s+)?(?:pagos|abonos)[^\d-]*(-?[\d,.]+)/]),
+      paymentsAmount: moneyFromPatterns(normalized, [/(?:total\s+de\s+)?(?:pagos|abonos)[^\d-]*(-?[\d,.]+)/]) ?? moneyFromLabelProximity(text, [...cardFieldAliases.paymentsAmount]),
       interestAmount: moneyFromPatterns(cardCostText, [/inter[eé]s(?:es)?[^\d-]*(-?[\d,.]+)/]),
       feesAmount: moneyFromPatterns(normalized, [/comisi[oó]n(?:es)?[^\d-]*(-?[\d,.]+)/]),
       vatAmount: moneyFromPatterns(normalized, [/\biva\b[^\d-]*(-?[\d,.]+)/]),
@@ -1711,13 +1760,35 @@ function isPayrollLikeTransaction(tx: Transaction) {
   )
 }
 
+function payrollAccountKey(accountId: string) {
+  return accountId.replace(/-(?:cfdi|checking)$/i, '')
+}
+
+function samePayrollAccount(left: Transaction, right: Transaction) {
+  if (left.accountId === right.accountId) return true
+  const leftKey = payrollAccountKey(left.accountId)
+  const rightKey = payrollAccountKey(right.accountId)
+  if (leftKey === rightKey) return true
+  const leftGeneric = /-(?:cfdi|checking)$/i.test(left.accountId)
+  const rightGeneric = /-(?:cfdi|checking)$/i.test(right.accountId)
+  const leftGroup = leftKey.replace(/-\d{4,}$/i, '')
+  const rightGroup = rightKey.replace(/-\d{4,}$/i, '')
+  if (leftGroup === rightGroup && (leftGeneric || rightGeneric)) return true
+  if (!/nomina|payroll/i.test(`${left.accountId} ${right.accountId}`)) return false
+  const rightTokens = new Set(normalizeForSearch(right.merchant).split(/\s+/).filter((token) => token.length >= 4))
+  const sharedMerchantTokens = normalizeForSearch(left.merchant)
+    .split(/\s+/)
+    .filter((token) => token.length >= 4 && rightTokens.has(token))
+  return sharedMerchantTokens.length >= 2
+}
+
 function hasPayrollContext(value: string) {
   return /nomina|n[oó]mina|salary|payroll|sueldo|salario/.test(normalizeForSearch(value))
 }
 
 function payrollSemanticKey(tx: Transaction) {
   if (!isPayrollLikeTransaction(tx)) return ''
-  return `payroll|${tx.date}|${Math.round(tx.amount * 100)}`
+  return `payroll|${payrollAccountKey(tx.accountId)}|${tx.date}|${Math.round(tx.amount * 100)}`
 }
 
 function dayNumber(date: string) {
@@ -1759,7 +1830,9 @@ function payrollToleranceMatchIds(tx: Transaction, candidates: Transaction[]) {
   if (!isPayrollLikeTransaction(tx)) return []
   const amountTolerance = 1
   const dateToleranceDays = 3
-  const eligible = candidates.filter((candidate) => isPayrollLikeTransaction(candidate) && dateDistanceDays(tx.date, candidate.date) <= dateToleranceDays)
+  const eligible = candidates.filter(
+    (candidate) => isPayrollLikeTransaction(candidate) && samePayrollAccount(tx, candidate) && dateDistanceDays(tx.date, candidate.date) <= dateToleranceDays,
+  )
   const directMatch = eligible.find((candidate) => Math.abs(candidate.amount - tx.amount) <= amountTolerance)
   if (directMatch) return [directMatch.id]
 
@@ -1772,7 +1845,7 @@ function incomingPayrollSplitMatches(transactions: Transaction[], candidates: Tr
   const incomingPayroll = transactions.filter(isPayrollLikeTransaction)
   for (const candidate of candidates) {
     const eligible = incomingPayroll.filter(
-      (tx) => !matches.has(tx.id) && tx.amount < candidate.amount && dateDistanceDays(tx.date, candidate.date) <= dateToleranceDays,
+      (tx) => !matches.has(tx.id) && samePayrollAccount(tx, candidate) && tx.amount < candidate.amount && dateDistanceDays(tx.date, candidate.date) <= dateToleranceDays,
     )
     const splitIds = payrollSplitMatchIds(candidate.amount, eligible)
     for (const id of splitIds) matches.set(id, [candidate.id])
@@ -2161,7 +2234,7 @@ function upsertCreditCardDebt(
   accountId: string,
   name: string,
   balance: number,
-  details: { balanceIsDebt?: boolean; creditLimit?: number; minimumPayment?: number; dueDate?: string } = {},
+  details: { balanceIsDebt?: boolean; creditLimit?: number; minimumPayment?: number; dueDate?: string; currency?: 'MXN' | 'USD' } = {},
 ) {
   const debtBalance = details.balanceIsDebt ? Math.abs(balance) : Math.abs(Math.min(0, balance))
   if (!debtBalance) return profile.debts
@@ -2175,6 +2248,8 @@ function upsertCreditCardDebt(
             creditLimit: details.creditLimit ?? debt.creditLimit,
             minimumPayment: details.minimumPayment ?? debt.minimumPayment,
             dueDate: details.dueDate ?? debt.dueDate,
+            accountId,
+            currency: details.currency ?? debt.currency ?? 'MXN',
           }
         : debt,
     )
@@ -2183,14 +2258,63 @@ function upsertCreditCardDebt(
     {
       id: `debt-${accountId}`,
       name,
+      accountId,
       balance: debtBalance,
       apr: 0,
       minimumPayment: details.minimumPayment ?? 0,
       creditLimit: details.creditLimit,
       dueDate: details.dueDate ?? new Date().toISOString().slice(0, 10),
+      currency: details.currency ?? 'MXN',
     },
     ...profile.debts,
   ]
+}
+
+function investmentPositionsFromFacts(
+  accountId: string,
+  accountCurrency: 'MXN' | 'USD',
+  document: ImportedDocument,
+): InvestmentPosition[] {
+  const extracted = document.extracted ?? {}
+  const sourceGroups = [
+    { values: extracted.positions, valueKey: 'marketValue', type: 'position' },
+    { values: extracted.subaccountPositions, valueKey: 'balance', type: 'subaccount' },
+  ]
+  const asOfDate =
+    (typeof extracted.statementDate === 'string' && extracted.statementDate) ||
+    (typeof extracted.periodEnd === 'string' && extracted.periodEnd) ||
+    document.importedAt.slice(0, 10)
+  const currency = extracted.currency === 'USD' ? 'USD' : accountCurrency
+  return sourceGroups.flatMap(({ values, valueKey, type }) => {
+    if (!Array.isArray(values)) return []
+    return values.flatMap((value, index) => {
+      if (!value || typeof value !== 'object') return []
+      const fact = value as Record<string, unknown>
+      const name = String(fact.name ?? fact.instrument ?? `${type} ${index + 1}`).trim()
+      const marketValue = Number(fact[valueKey])
+      if (!name || !Number.isFinite(marketValue) || marketValue < 0) return []
+      const position: InvestmentPosition = {
+        id: `position-${accountId}-${slug(name)}-${asOfDate}`,
+        accountId,
+        name,
+        instrumentType: typeof fact.instrumentType === 'string' ? fact.instrumentType : undefined,
+        quantity: typeof fact.quantity === 'number' ? fact.quantity : undefined,
+        price: typeof fact.price === 'number' ? fact.price : undefined,
+        marketValue,
+        currency,
+        unrealizedGain: typeof fact.unrealizedGain === 'number' ? fact.unrealizedGain : undefined,
+        asOfDate,
+        sourceDocumentId: document.id,
+      }
+      return [position]
+    })
+  })
+}
+
+function mergeInvestmentPositions(profile: FinancialProfile, incoming: InvestmentPosition[]) {
+  const positions = new Map((profile.investmentPositions ?? []).map((position) => [position.id, position]))
+  for (const position of incoming) positions.set(position.id, position)
+  return [...positions.values()]
 }
 
 function buildTransaction(input: ParsedTransactionInput, file: File, index: number): Transaction {
@@ -2218,13 +2342,22 @@ function deriveMonthlySnapshots(profile: FinancialProfile): FinancialProfile {
     byMonth.set(month, current)
   }
 
-  const accountAssets = profile.accounts
+  const reportingAccounts = profile.accounts.filter((account) => account.currency === profile.reportingCurrency)
+  const linkedDebtAccountIds = new Set(profile.debts.map((debt) => debt.accountId).filter((id): id is string => Boolean(id)))
+  const positionValues = new Map<string, number>()
+  for (const position of profile.investmentPositions ?? []) {
+    if (position.currency !== profile.reportingCurrency) continue
+    positionValues.set(position.accountId, (positionValues.get(position.accountId) ?? 0) + position.marketValue)
+  }
+  const accountAssets = reportingAccounts
     .filter((account) => !['credit_card', 'loan'].includes(account.type))
-    .reduce((sum, account) => sum + Math.max(0, account.balance), 0)
-  const accountLiabilities = profile.accounts
-    .filter((account) => ['credit_card', 'loan'].includes(account.type))
+    .reduce((sum, account) => sum + (positionValues.has(account.id) ? positionValues.get(account.id)! : Math.max(0, account.balance)), 0)
+  const accountLiabilities = reportingAccounts
+    .filter((account) => ['credit_card', 'loan'].includes(account.type) && !linkedDebtAccountIds.has(account.id))
     .reduce((sum, account) => sum + Math.abs(Math.min(0, account.balance)), 0)
-  const debtLiabilities = profile.debts.reduce((sum, debt) => sum + debt.balance, 0)
+  const debtLiabilities = profile.debts
+    .filter((debt) => (debt.currency ?? 'MXN') === profile.reportingCurrency)
+    .reduce((sum, debt) => sum + debt.balance, 0)
   const netWorth = accountAssets - accountLiabilities - debtLiabilities
 
   const snapshots = [...byMonth.entries()]
@@ -2245,7 +2378,7 @@ function deriveMonthlySnapshots(profile: FinancialProfile): FinancialProfile {
     ...profile,
     grossMonthlyIncome: Math.max(profile.grossMonthlyIncome, avgIncome),
     netMonthlyIncome: Math.max(profile.netMonthlyIncome, avgIncome),
-    monthlySnapshots: snapshots.length ? snapshots : profile.monthlySnapshots,
+    monthlySnapshots: enrichSnapshotsWithDocumentPositions(profile, snapshots.length ? snapshots : profile.monthlySnapshots),
   }
 }
 
@@ -2254,7 +2387,7 @@ function mergeDocument(profile: FinancialProfile, document: ImportedDocument) {
     ? profile.importedDocuments.find((row) => row.documentFingerprint === document.documentFingerprint)
     : undefined
   if (existingByFingerprint) {
-    const nextDocument = {
+    const stableDocument = {
       ...document,
       id: existingByFingerprint.id,
       warnings: [
@@ -2262,6 +2395,36 @@ function mergeDocument(profile: FinancialProfile, document: ImportedDocument) {
         'Documento reimportado con contenido ya conocido; se conserva el identificador anterior para evitar duplicados.',
       ],
     }
+    const approvalKeys = [
+      'appliedRows',
+      'skippedDuplicateRows',
+      'skippedSemanticDuplicates',
+      'matchedTransactionIds',
+      'reviewedMovementRowsApplied',
+      'reviewedMovementRowsAppliedAt',
+      'reviewedMovementRowsApproval',
+      'reviewedPositionRowsApplied',
+      'reviewedPositionRowsAppliedAt',
+      'reviewedPositionRowsApproval',
+    ]
+    const hasManualApproval = Boolean(existingByFingerprint.extracted?.reviewedMovementRowsAppliedAt || existingByFingerprint.extracted?.reviewedPositionRowsAppliedAt)
+    const preservedApproval = hasManualApproval
+      ? Object.fromEntries(approvalKeys.map((key) => [key, existingByFingerprint.extracted?.[key]]).filter(([, value]) => value !== undefined))
+      : {}
+    const nextDocument = hasManualApproval
+      ? {
+          ...stableDocument,
+          status: 'processed' as const,
+          sourceTransactionIds: existingByFingerprint.sourceTransactionIds?.length
+            ? existingByFingerprint.sourceTransactionIds
+            : stableDocument.sourceTransactionIds,
+          extracted: {
+            ...stableDocument.extracted,
+            ...preservedApproval,
+          },
+          warnings: [...(stableDocument.warnings ?? []), 'Aprobacion manual previa conservada al reimportar el mismo documento.'],
+        }
+      : stableDocument
     return profile.importedDocuments.map((row) => (row.id === existingByFingerprint.id ? nextDocument : row))
   }
 
@@ -2368,27 +2531,38 @@ function transactionFromPayrollPdf(document: ImportedDocument, accountId: string
 export function applyReviewedStatementMovements(profile: FinancialProfile, documentId: string): ApplyReviewedMovementsResult {
   const document = profile.importedDocuments.find((row) => row.id === documentId)
   if (!document) throw new Error('No se encontro el documento para aplicar movimientos.')
-  if (!['bank_statement', 'credit_card_statement', 'payroll_cfdi'].includes(document.kind ?? 'unknown')) {
-    throw new Error('Solo se pueden aplicar estados bancarios, tarjetas conciliadas o nominas con fecha e ingreso neto detectados.')
+  const isInvestmentStatement = document.kind === 'investment_statement'
+  if (!isInvestmentStatement && !['bank_statement', 'credit_card_statement', 'payroll_cfdi'].includes(document.kind ?? 'unknown')) {
+    throw new Error('Solo se pueden aplicar estados bancarios, tarjetas conciliadas, nominas o posiciones de inversion revisadas.')
   }
-  if (document.extracted?.reviewedMovementRowsAppliedAt) throw new Error('Este documento ya tenia movimientos revisados aplicados.')
+  if (document.extracted?.reviewedMovementRowsAppliedAt || document.extracted?.reviewedPositionRowsAppliedAt) throw new Error('Este documento ya tenia datos revisados aplicados.')
   const isCreditCardStatement = document.kind === 'credit_card_statement'
   const isPayrollPdf = document.kind === 'payroll_cfdi'
   if (isCreditCardStatement && document.extracted?.cardReconciliationStatus !== 'balanced') {
     throw new Error('Solo se pueden aplicar movimientos de tarjeta cuando la conciliacion de saldos esta balanceada.')
   }
-  const rows = isCreditCardStatement ? cardMovementRows(document) : statementMovementRows(document)
-  if (!isPayrollPdf && !rows.length) throw new Error('El documento no tiene movimientos visibles para aplicar.')
-
-  const accountType = isCreditCardStatement ? 'credit_card' : isPayrollPdf ? 'checking' : reviewedStatementAccountType(document)
+  const rows = isInvestmentStatement ? [] : isCreditCardStatement ? cardMovementRows(document) : statementMovementRows(document)
+  if (!rows.length && !isInvestmentStatement && !isPayrollPdf) throw new Error('El documento no tiene movimientos visibles para aplicar.')
+  const accountType = isInvestmentStatement
+    ? documentExtractedString(document, 'accountType') === 'retirement'
+      ? 'retirement'
+      : 'investment'
+    : isCreditCardStatement
+      ? 'credit_card'
+      : isPayrollPdf
+        ? 'checking'
+        : reviewedStatementAccountType(document)
   const institution = document.detectedInstitution ?? document.fileName
   const accountId = documentExtractedString(document, 'accountId') || `account-${slug(institution)}-${accountType}`
+  const documentCurrency = documentExtractedString(document, 'currency') === 'USD' ? 'USD' : 'MXN'
+  const reviewedPositions = isInvestmentStatement ? investmentPositionsFromFacts(accountId, documentCurrency, document) : []
+  if (isInvestmentStatement && !reviewedPositions.length) throw new Error('El documento de inversion no tiene posiciones validas para aplicar.')
   const { accounts } = getOrCreateAccount(profile, {
     id: accountId,
     name: isPayrollPdf ? 'Cuenta nomina importada' : document.detectedInstitution ? `${document.detectedInstitution} cuenta` : `Cuenta ${document.fileName}`,
     type: accountType,
     balance: 0,
-    currency: 'MXN',
+    currency: documentCurrency,
     creditLimit: isCreditCardStatement ? documentExtractedNumber(document, 'creditLimit') || undefined : undefined,
   })
   const transactions = isPayrollPdf
@@ -2400,7 +2574,9 @@ export function applyReviewedStatementMovements(profile: FinancialProfile, docum
             : transactionFromStatementMovement(document, accountId, accountType, row, index),
         )
         .filter((tx): tx is Transaction => Boolean(tx))
-  if (!transactions.length) throw new Error('La nomina requiere fecha de pago e ingreso neto detectados antes de aplicarla.')
+  if (!isInvestmentStatement && !transactions.length) {
+    throw new Error(isPayrollPdf ? 'La nomina requiere fecha de pago e ingreso neto detectados antes de aplicarla.' : 'El documento no tiene movimientos validos para aplicar.')
+  }
   const transactionMerge = mergeTransactions({ ...profile, accounts }, transactions)
   const lastRowBalance = [...rows].reverse().find((row) => typeof row.balance === 'number')?.balance
   const cardDebtBalance =
@@ -2412,13 +2588,18 @@ export function applyReviewedStatementMovements(profile: FinancialProfile, docum
       ? -Math.abs(cardDebtBalance)
       : undefined
     : documentExtractedNumber(document, 'closingBalance') || (typeof lastRowBalance === 'number' ? lastRowBalance : undefined)
+  const reviewedPositionBalance = reviewedPositions.reduce((sum, position) => sum + (position.currency === documentCurrency ? position.marketValue : 0), 0)
   const fallbackDelta = transactionMerge.addedTransactions.reduce((sum, tx) => sum + tx.amount, 0)
   const nextAccounts = accounts.map((account) =>
     account.id === accountId
       ? {
           ...account,
           creditLimit: isCreditCardStatement ? documentExtractedNumber(document, 'creditLimit') || account.creditLimit : account.creditLimit,
-          balance: typeof closingBalance === 'number' ? closingBalance : Number((account.balance + fallbackDelta).toFixed(2)),
+          balance: isInvestmentStatement
+            ? Number(reviewedPositionBalance.toFixed(2))
+            : typeof closingBalance === 'number'
+              ? closingBalance
+              : Number((account.balance + fallbackDelta).toFixed(2)),
         }
       : account,
   )
@@ -2429,29 +2610,45 @@ export function applyReviewedStatementMovements(profile: FinancialProfile, docum
           creditLimit: documentExtractedNumber(document, 'creditLimit') || undefined,
           minimumPayment: documentExtractedNumber(document, 'minimumPayment') || undefined,
           dueDate: documentExtractedString(document, 'dueDate') || undefined,
+          currency: documentCurrency,
         })
       : profile.debts
+  const nextPositions = isInvestmentStatement
+    ? mergeInvestmentPositions(profile, reviewedPositions)
+    : profile.investmentPositions ?? []
   const existingSourceIds = document.sourceTransactionIds ?? []
   const nextDocument: ImportedDocument = {
     ...document,
     status: 'processed',
-    summary: `${document.summary} Movimientos revisados aplicados por aprobacion manual: ${transactionMerge.addedTransactions.length}.`,
+    summary: isInvestmentStatement
+      ? `${document.summary} Posiciones revisadas aplicadas por aprobacion manual: ${reviewedPositions.length}.`
+      : `${document.summary} Movimientos revisados aplicados por aprobacion manual: ${transactionMerge.addedTransactions.length}.`,
     extracted: {
       ...document.extracted,
       appliedRows: transactionMerge.addedTransactions.length,
       skippedDuplicateRows: transactionMerge.skippedDuplicateIds.length,
       skippedSemanticDuplicates: transactionMerge.skippedSemanticDuplicates,
       matchedTransactionIds: transactionMerge.matchedTransactionIds,
-      reviewedMovementRowsApplied: isPayrollPdf ? transactions.length : rows.length,
-      reviewedMovementRowsAppliedAt: new Date().toISOString(),
-      reviewedMovementRowsApproval: 'manual_user_action',
+      ...(isInvestmentStatement
+        ? {
+            reviewedPositionRowsApplied: reviewedPositions.length,
+            reviewedPositionRowsAppliedAt: new Date().toISOString(),
+            reviewedPositionRowsApproval: 'manual_user_action',
+          }
+        : {
+            reviewedMovementRowsApplied: isPayrollPdf ? transactions.length : rows.length,
+            reviewedMovementRowsAppliedAt: new Date().toISOString(),
+            reviewedMovementRowsApproval: 'manual_user_action',
+          }),
     },
     sourceTransactionIds: [...existingSourceIds, ...transactionMerge.addedIds],
     warnings: [
       ...(document.warnings ?? []),
-      transactionMerge.addedTransactions.length
-        ? `${transactionMerge.addedTransactions.length} movimiento(s) de ${isPayrollPdf ? 'nomina PDF' : isCreditCardStatement ? 'tarjeta' : 'PDF'} aplicados tras revision manual.`
-        : 'No se aplicaron movimientos nuevos; las filas revisadas ya estaban duplicadas o incompletas.',
+      isInvestmentStatement
+        ? `${reviewedPositions.length} posicion(es) aplicadas tras revision manual.`
+        : transactionMerge.addedTransactions.length
+          ? `${transactionMerge.addedTransactions.length} movimiento(s) de ${isPayrollPdf ? 'nomina PDF' : isCreditCardStatement ? 'tarjeta' : 'PDF'} aplicados tras revision manual.`
+          : 'No se aplicaron movimientos nuevos; las filas revisadas ya estaban duplicadas o incompletas.',
     ],
   }
   const nextProfile = deriveMonthlySnapshots({
@@ -2459,13 +2656,16 @@ export function applyReviewedStatementMovements(profile: FinancialProfile, docum
     accounts: nextAccounts,
     debts: nextDebts,
     transactions: transactionMerge.transactions,
+    investmentPositions: nextPositions,
     importedDocuments: mergeDocument(profile, nextDocument),
   })
 
   return {
     profile: nextProfile,
     document: nextDocument,
-    summary: `${transactionMerge.addedTransactions.length} movimiento(s) aplicado(s) desde ${document.fileName}; ${transactionMerge.skippedDuplicateIds.length} duplicado(s) omitido(s).`,
+    summary: isInvestmentStatement
+      ? `${reviewedPositions.length} posicion(es) aplicadas desde ${document.fileName}.`
+      : `${transactionMerge.addedTransactions.length} movimiento(s) aplicado(s) desde ${document.fileName}; ${transactionMerge.skippedDuplicateIds.length} duplicado(s) omitido(s).`,
   }
 }
 
@@ -2529,8 +2729,8 @@ export async function importFinancialFile(profile: FinancialProfile, file: File)
 async function importPdf(profile: FinancialProfile, file: File): Promise<ImportResult> {
   const buffer = await file.arrayBuffer()
   const fingerprint = await documentFingerprint(file, buffer)
-  const pdf = await getDocument({ data: buffer }).promise
-  const pageLimit = Math.min(pdf.numPages, 8)
+  const pdf = await getDocument({ data: buffer, standardFontDataUrl }).promise
+  const pageLimit = pdf.numPages
   const pages: PdfTextPage[] = []
 
   for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
@@ -2616,13 +2816,14 @@ async function importPdf(profile: FinancialProfile, file: File): Promise<ImportR
     Number(statementFacts.closingBalance ?? 0) ||
     Number(statementFacts.portfolioValue ?? 0) ||
     parseMoney(openingOrClosingBalance)
+  const documentCurrency = statementFacts.currency === 'USD' ? 'USD' : 'MXN'
   const { accounts } = accountBacked
     ? getOrCreateAccount(profile, {
         id: accountId,
         name: institution ? `${institution} ${accountType === 'credit_card' ? 'tarjeta' : 'cuenta'}` : `Cuenta ${file.name}`,
         type: accountType,
         balance: 0,
-        currency: 'MXN',
+        currency: documentCurrency,
         creditLimit: accountType === 'credit_card' && Number(statementFacts.creditLimit ?? 0) ? Number(statementFacts.creditLimit) : undefined,
       })
     : { accounts: profile.accounts }
@@ -2663,6 +2864,7 @@ async function importPdf(profile: FinancialProfile, file: File): Promise<ImportR
       pages: pdf.numPages,
       pdfTextMode,
       pdfTextPagesRead: pageLimit,
+      pdfSummaryPagesRead: pageLimit,
       pagesWithLayoutText,
       pagesWithOcrText,
       nativeTextItems: nativeItemCount,
@@ -2723,7 +2925,10 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
         ? 'bank_statement'
         : undefined,
   )
+  const isUnknownCsv = classification.kind === 'unknown' && !isBankMovementSchema && !isAmexActivitySchema && !isInvestmentOperationSchema && !isRetirementSubaccountSchema
   const institution = isAmexActivitySchema ? 'American Express' : inferInstitution(file.name, text.slice(0, 500))
+  const csvCurrencyText = normalizeForSearch(`${file.name} ${text.slice(0, 2000)}`)
+  const csvCurrency: 'MXN' | 'USD' = /\busd\b|d[oó]lares?/.test(csvCurrencyText) ? 'USD' : 'MXN'
   const accountType =
     classification.kind === 'investment_statement'
       ? isRetirementSubaccountSchema || isRetirementText(`${file.name} ${text.slice(0, 1000)}`)
@@ -2731,18 +2936,25 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
         : 'investment'
       : classification.kind === 'bank_statement'
         ? 'checking'
-        : 'credit_card'
+        : classification.kind === 'credit_card_statement'
+          ? 'credit_card'
+          : 'checking'
   const accountId = `account-${slug(institution ?? (accountType === 'credit_card' ? 'tarjeta' : 'cuenta'))}-${accountType}`
   const { accounts } = getOrCreateAccount(profile, {
     id: accountId,
     name: institution ? `${institution} ${accountType === 'credit_card' ? 'tarjeta' : 'cuenta'}` : accountType === 'credit_card' ? 'Tarjeta importada' : 'Cuenta importada',
     type: accountType,
     balance: 0,
-    currency: 'MXN',
+    currency: csvCurrency,
   })
 
   let skippedRows = 0
-  let unparsedDates = 0
+  let unparsedDates = isUnknownCsv
+    ? parsed.data.filter((row) => {
+        const rawDate = getRowValue(row, ['Fecha', 'Date', 'Fecha de Compra', 'Transaction Date'])
+        return Boolean(rawDate) && !normalizeDate(rawDate)
+      }).length
+    : 0
   let conflictingAmountRows = 0
   let ambiguousDirectionRows = 0
   let balanceDeltaInferredRows = 0
@@ -2769,9 +2981,16 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
   let payrollAccountWithdrawalRows = 0
   let openingBalance: number | undefined
   let closingBalance: number | undefined
-  const transactions = isInvestmentOperationSchema || isRetirementSubaccountSchema
+  const orderedRows = isBankMovementSchema
+    ? [...parsed.data].sort((left, right) => {
+        const leftDate = normalizeDate(getRowValue(left, ['Fecha', 'Date', 'Fecha de Compra', 'Transaction Date'])) ?? '9999-12-31'
+        const rightDate = normalizeDate(getRowValue(right, ['Fecha', 'Date', 'Fecha de Compra', 'Transaction Date'])) ?? '9999-12-31'
+        return leftDate.localeCompare(rightDate)
+      })
+    : parsed.data
+  const transactions = isInvestmentOperationSchema || isRetirementSubaccountSchema || isUnknownCsv
     ? []
-    : parsed.data.slice(0, 1000).map((row, index) => {
+    : orderedRows.slice(0, 1000).map((row, index) => {
       const rawDate = getRowValue(row, ['Fecha', 'Date', 'Fecha de Compra', 'Transaction Date'])
       const date = normalizeDate(rawDate)
       const description =
@@ -2885,6 +3104,15 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
       .filter((tx): tx is Transaction => Boolean(tx))
 
   const transactionMerge = mergeTransactions(profile, transactions)
+  const cardActivityFacts = isAmexActivitySchema
+    ? {
+        cardActivityRows: transactions.length,
+        cardActivityDates: transactions.filter((transaction) => Boolean(transaction.date)).length,
+        cardActivityDescriptions: transactions.filter((transaction) => transaction.merchant !== 'Movimiento importado').length,
+        cardActivityAmounts: transactions.filter((transaction) => Number.isFinite(transaction.amount) && transaction.amount !== 0).length,
+        cardActivityCurrency: csvCurrency,
+      }
+    : {}
   const csvInvestmentFacts = cleanFacts({ ...investmentCsvFacts, ...retirementCsvFacts })
   const investmentExtractionQuality =
     isInvestmentOperationSchema || isRetirementSubaccountSchema ? buildExtractionQuality('investment_statement', text, csvInvestmentFacts) : null
@@ -2900,24 +3128,38 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
       : Math.abs(bankBalanceDifference ?? 0) <= 1
         ? 'balanced'
         : 'mismatch'
-  const nextAccounts = accounts.map((account) =>
-    account.id === accountId ? { ...account, balance: accountType === 'credit_card' ? Math.min(account.balance, cardBalance) : account.balance + cardBalance } : account,
-  )
+  const retirementBalance = Number(retirementCsvFacts.retirementBalance ?? retirementCsvFacts.subaccountBalanceTotal)
+  const nextAccounts = accounts.map((account) => {
+    if (account.id !== accountId) return account
+    if (accountType === 'retirement' && Number.isFinite(retirementBalance)) return { ...account, balance: retirementBalance }
+    return { ...account, balance: accountType === 'credit_card' ? Math.min(account.balance, cardBalance) : account.balance + cardBalance }
+  })
   const document: ImportedDocument = {
     id: docId(file),
     documentFingerprint: fingerprint,
     fingerprintVersion,
     fileName: file.name,
     fileType: 'csv',
-    kind: classification.kind === 'unknown' ? 'credit_card_statement' : classification.kind,
+    kind: classification.kind,
     detectedInstitution: institution,
     importedAt: new Date().toISOString(),
-    status: isInvestmentOperationSchema || isRetirementSubaccountSchema || parsed.errors.length || unparsedDates || ambiguousDirectionRows ? 'needs_review' : 'processed',
+    status:
+      isInvestmentOperationSchema ||
+      isRetirementSubaccountSchema ||
+      isUnknownCsv ||
+      parsed.errors.length ||
+      unparsedDates ||
+      ambiguousDirectionRows ||
+      bankReconciliationStatus === 'mismatch'
+        ? 'needs_review'
+        : 'processed',
     summary: isRetirementSubaccountSchema
       ? `${Number(retirementCsvFacts.subaccountRows ?? 0)} subcuenta(s) de retiro capturadas desde CSV para revision.`
       : isInvestmentOperationSchema
       ? `${Number(investmentCsvFacts.investmentOperationRowCount ?? 0)} operacion(es) de inversion capturadas desde CSV para revision.`
-      : `${transactions.length} movimiento(s) importados localmente desde CSV como ${classification.kind === 'unknown' ? 'estado de cuenta' : classification.kind}.`,
+      : isUnknownCsv
+        ? 'CSV no clasificado; no se aplicaron movimientos automaticamente. Revisa columnas, naturaleza y moneda antes de importar.'
+        : `${transactions.length} movimiento(s) importados localmente desde CSV como ${classification.kind}.`,
     extractedRows: isRetirementSubaccountSchema
       ? Number(retirementCsvFacts.subaccountRows ?? 0)
       : isInvestmentOperationSchema
@@ -2928,6 +3170,7 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
     extracted: {
       qualitySchemaVersion,
       accountType,
+      detectedCurrency: csvCurrency,
       schema: isAmexActivitySchema
         ? 'amex_account_activity_mx'
         : isRetirementSubaccountSchema
@@ -2937,6 +3180,13 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
           : isBankMovementSchema
             ? 'bank_movements_deposits_withdrawals'
             : 'generic_csv',
+      ...(isAmexActivitySchema
+        ? {
+            documentSubtype: 'credit_card_statement.card_activity',
+            documentSubtypeLabel: 'Actividad de tarjeta',
+            ...cardActivityFacts,
+          }
+        : {}),
       rows: parsed.data.length,
       skippedRows,
       unparsedDates,
@@ -3008,6 +3258,7 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
       ...(isInvestmentOperationSchema
         ? ['CSV de inversion capturado como evidencia de portafolio; operaciones, comisiones e impuestos quedan en revision y no alteran ingresos/gastos automaticamente.']
         : []),
+      ...(isUnknownCsv ? ['CSV no clasificado: no se aplicaron movimientos para evitar convertir ingresos en gastos.'] : []),
       ...(payrollAccountDepositRows > 0 && payrollAccountWithdrawalRows > 0
         ? ['Estado de cuenta de nomina con depositos y retiros: solo los depositos claramente identificados como nomina cuentan como ingreso; los retiros se clasifican por concepto.']
         : []),
@@ -3028,6 +3279,9 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
     accountType === 'credit_card'
       ? upsertCreditCardDebt(profile, accountId, institution ? `${institution} tarjeta` : 'Tarjeta importada', cardBalance)
       : profile.debts
+  const nextInvestmentPositions = isRetirementSubaccountSchema
+    ? mergeInvestmentPositions(profile, investmentPositionsFromFacts(accountId, csvCurrency, document))
+    : profile.investmentPositions ?? []
 
   return {
     profile: {
@@ -3035,6 +3289,7 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
       accounts: nextAccounts,
       debts: nextDebts,
       transactions: transactionMerge.transactions,
+      investmentPositions: nextInvestmentPositions,
       importedDocuments: mergeDocument(profile, document),
     },
     document,
@@ -3178,6 +3433,13 @@ async function importXml(profile: FinancialProfile, file: File): Promise<ImportR
   const totalDeducciones = parseMoney(attr(nomina, 'TotalDeducciones'))
   const totalOtrosPagos = parseMoney(attr(nomina, 'TotalOtrosPagos'))
   const netIncome = total || Math.max(0, totalPercepciones + totalOtrosPagos - totalDeducciones)
+  const calculatedNetIncome = Math.max(0, totalPercepciones + totalOtrosPagos - totalDeducciones)
+  const payrollReconciliationDifference = Number((netIncome - calculatedNetIncome).toFixed(2))
+  const payrollReconciliationStatus = [totalPercepciones, totalOtrosPagos, totalDeducciones, netIncome].every(Number.isFinite)
+    ? Math.abs(payrollReconciliationDifference) <= 1
+      ? 'balanced'
+      : 'mismatch'
+    : 'insufficient'
   const employerName = attr(emisor, 'Nombre') || 'Nomina'
   const employerRfcSuffix = suffix(attr(emisor, 'Rfc'))
   const employeeRfcSuffix = suffix(attr(cfdiReceptor, 'Rfc'))
@@ -3233,7 +3495,7 @@ async function importXml(profile: FinancialProfile, file: File): Promise<ImportR
   })
 
   const dateWarning = fechaPago ? '' : 'Fecha de pago no reconocida; ingreso no aplicado automaticamente.'
-  const canApplyPayroll = verifiableCfdi && hasPayrollSignal && Boolean(netIncome) && Boolean(fechaPago)
+  const canApplyPayroll = verifiableCfdi && hasPayrollSignal && payrollReconciliationStatus === 'balanced' && Boolean(netIncome) && Boolean(fechaPago)
   const transactions = canApplyPayroll
     ? [
         buildTransaction(
@@ -3280,6 +3542,9 @@ async function importXml(profile: FinancialProfile, file: File): Promise<ImportR
     totalPercepciones,
     totalDeducciones,
     totalOtrosPagos,
+    calculatedNetIncome,
+    payrollReconciliationDifference,
+    payrollReconciliationStatus,
     totalSalaries,
     totalPerceptionsTaxable,
     totalPerceptionsExempt,
@@ -3339,6 +3604,11 @@ async function importXml(profile: FinancialProfile, file: File): Promise<ImportR
       ...(!hasPayrollSignal ? ['No se detecto namespace de nomina SAT; ingreso no aplicado automaticamente.'] : []),
       ...(dateWarning ? [dateWarning] : []),
       ...(!netIncome ? ['Ingreso neto no detectado; revisa totales de nomina.'] : []),
+      ...(payrollReconciliationStatus === 'mismatch'
+        ? [`Conciliacion de nomina no cuadra; diferencia detectada ${payrollReconciliationDifference.toFixed(2)}.`]
+        : payrollReconciliationStatus === 'insufficient'
+          ? ['Conciliacion de nomina insuficiente; faltan totales para aplicar el ingreso automaticamente.']
+          : []),
       ...(transactionMerge.skippedSemanticDuplicates
         ? [`${transactionMerge.skippedSemanticDuplicates} ingreso(s) de nomina ya existian como deposito equivalente, cercano o dividido; el CFDI queda como evidencia y no duplica el dashboard.`]
         : []),

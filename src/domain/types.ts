@@ -31,6 +31,20 @@ export interface Account {
   creditLimit?: number
 }
 
+export interface InvestmentPosition {
+  id: string
+  accountId: string
+  name: string
+  instrumentType?: string
+  quantity?: number
+  price?: number
+  marketValue: number
+  currency: 'MXN' | 'USD'
+  unrealizedGain?: number
+  asOfDate: string
+  sourceDocumentId?: string
+}
+
 export interface Transaction {
   id: string
   date: string
@@ -90,6 +104,13 @@ export interface MonthlySnapshot {
   debtPayments: number
   savings: number
   netWorth: number
+  /** Balances documentados al cierre del mes. Son opcionales para no inventar historia previa. */
+  liquidCash?: number
+  debtBalance?: number
+  debtMinimumPayments?: number
+  cardBalance?: number
+  cardLimit?: number
+  sourceDocumentIds?: string[]
 }
 
 export interface ImportedDocument {
@@ -126,4 +147,5 @@ export interface FinancialProfile {
   budgets: Budget[]
   monthlySnapshots: MonthlySnapshot[]
   importedDocuments: ImportedDocument[]
+  investmentPositions?: InvestmentPosition[]
 }

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { documentKindLabels, documentSubtypeForExtracted, expectedFieldSpecsForExtracted } from './lib/document-field-specs.mjs'
+import { migrateProfile } from '../server/profile-schema.mjs'
 
 const outputPathArg = process.argv.find((arg) => arg.startsWith('--output='))
 const outputPath = outputPathArg ? resolve(process.cwd(), outputPathArg.slice('--output='.length)) : ''
@@ -177,7 +178,7 @@ const database = new DatabaseSync(dbPath, {
 })
 
 try {
-  const profiles = database.prepare('SELECT data_json FROM profiles ORDER BY updated_at DESC').all().map((row) => JSON.parse(row.data_json))
+  const profiles = database.prepare('SELECT data_json FROM profiles ORDER BY updated_at DESC').all().map((row) => migrateProfile(JSON.parse(row.data_json)))
   const diagnostic = analyzeProfiles(profiles)
   const json = JSON.stringify(diagnostic, null, 2)
 
