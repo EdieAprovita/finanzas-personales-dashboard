@@ -59,7 +59,7 @@ jobs:
         run: |
           if [ "$EVENT_NAME" = "pull_request" ]; then
             git diff --check "$BASE_SHA...$HEAD_SHA"
-          elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+          elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
             git diff --check "$BEFORE_SHA" "$HEAD_SHA"
           elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
             git diff --check HEAD^ HEAD
