@@ -7,6 +7,8 @@ import { XMLParser, XMLValidator } from 'fast-xml-parser'
 import { generateSyntheticDocumentFixtures } from './lib/synthetic-document-fixtures.mjs'
 import { getRowValue, normalizeHeader, parseMoney } from './lib/document-inspection.mjs'
 
+const standardFontDataUrl = `${process.cwd()}/node_modules/pdfjs-dist/standard_fonts/`
+
 function time(label, fn) {
   const start = performance.now()
   const result = fn()
@@ -68,7 +70,7 @@ async function benchXml(xmlPath) {
 async function benchPdf(pdfPath) {
   return timeAsync('pdfjs-dist digital pdf', async () => {
     const bytes = new Uint8Array(readFileSync(pdfPath))
-    const pdf = await getDocument({ data: bytes, disableWorker: true }).promise
+    const pdf = await getDocument({ data: bytes, disableWorker: true, standardFontDataUrl }).promise
     let text = ''
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber)

@@ -1,11 +1,32 @@
 import { createServer } from 'node:http'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto'
 import { basename } from 'node:path'
-import { database, dbPath, rowToKnowledge, rowToProfile, writeAudit } from './db.mjs'
+import {
+  database,
+  dbPath,
+  listProfileDocuments,
+  listProfileReconciliation,
+  listProfileTransactionAmounts,
+  rowToKnowledge,
+  rowToProfile,
+  syncProfileDocuments,
+  writeAudit,
+} from './db.mjs'
 import { financialProfileSchema, knowledgeExplainRequestSchema, migrateProfile } from './profile-schema.mjs'
 
 const port = Number(process.env.FINANZAS_API_PORT ?? 4147)
 const lanMode = process.env.FINANZAS_LAN_MODE === '1'
+const accessToken = process.env.FINANZAS_API_TOKEN ?? randomBytes(32).toString('hex')
+if (Buffer.byteLength(accessToken) < 32) throw new Error('FINANZAS_API_TOKEN debe tener al menos 32 bytes.')
+const expectedAuthorization = Buffer.from(`Bearer ${accessToken}`)
+
+function isAuthenticated(req) {
+  const authorization = req.headers.authorization
+  if (typeof authorization !== 'string') return false
+  const supplied = Buffer.from(authorization)
+  return supplied.length === expectedAuthorization.length && timingSafeEqual(supplied, expectedAuthorization)
+}
+
 const configuredOrigins = new Set(
   (process.env.FINANZAS_ALLOWED_ORIGINS ?? '')
     .split(',')
@@ -28,7 +49,7 @@ function isPrivateLanHost(hostname) {
 }
 
 function isAllowedOrigin(origin) {
-  if (!origin) return !lanMode
+  if (!origin) return true
   if (configuredOrigins.has(origin)) return true
 
   try {
@@ -45,7 +66,7 @@ function send(res, status, body, origin) {
   const headers = {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
-    'access-control-allow-headers': 'content-type',
+    'access-control-allow-headers': 'content-type,authorization',
   }
   if (origin && isAllowedOrigin(origin)) {
     headers['access-control-allow-origin'] = origin
@@ -95,18 +116,29 @@ function listProfiles() {
 
 function upsertProfile(profile) {
   const validatedProfile = financialProfileSchema.parse(migrateProfile(profile))
-  database
-    .prepare(
-      `INSERT INTO profiles (id, name, data_json)
-       VALUES (?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         name = excluded.name,
-         data_json = excluded.data_json,
-         updated_at = CURRENT_TIMESTAMP`,
-    )
-    .run(validatedProfile.id, validatedProfile.name, JSON.stringify(validatedProfile))
-  writeAudit('profile', validatedProfile.id, 'upsert', { name: validatedProfile.name })
-  return validatedProfile
+  database.exec('BEGIN')
+  try {
+    database
+      .prepare(
+        `INSERT INTO profiles (id, name, data_json)
+         VALUES (?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           data_json = excluded.data_json,
+           updated_at = CURRENT_TIMESTAMP`,
+      )
+      .run(validatedProfile.id, validatedProfile.name, JSON.stringify(validatedProfile))
+    syncProfileDocuments(validatedProfile)
+    writeAudit('profile', validatedProfile.id, 'upsert', {
+      name: validatedProfile.name,
+      documentCount: validatedProfile.importedDocuments.length,
+    })
+    database.exec('COMMIT')
+    return validatedProfile
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
 }
 
 function deleteAllProfiles() {
@@ -222,12 +254,38 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
-      return send(res, 200, { ok: true, dbFile: basename(dbPath), mode: lanMode ? 'sqlite-local-lan' : 'sqlite-local-file', writable: true }, origin)
+      return send(res, 200, { ok: true, dbFile: basename(dbPath), mode: lanMode ? 'sqlite-local-lan' : 'sqlite-local-file', writable: true, authRequired: true }, origin)
     }
 
+  if (!isAuthenticated(req)) return send(res, 401, { error: 'Introduce la clave de acceso de la API para abrir tus datos.' }, origin)
+
     if (req.method === 'GET' && url.pathname === '/api/profiles') {
-      return send(res, 200, { profiles: listProfiles() }, origin)
-    }
+    return send(res, 200, { profiles: listProfiles() }, origin)
+  }
+
+  const profileDocumentsMatch = url.pathname.match(/^\/api\/profiles\/([^/]+)\/documents$/)
+  if (req.method === 'GET' && profileDocumentsMatch) {
+    const profileId = decodeURIComponent(profileDocumentsMatch[1])
+    const exists = database.prepare('SELECT 1 FROM profiles WHERE id = ?').get(profileId)
+    if (!exists) return send(res, 404, { error: 'Perfil no encontrado.' }, origin)
+    return send(res, 200, { documents: listProfileDocuments(profileId) }, origin)
+  }
+
+  const profileReconciliationMatch = url.pathname.match(/^\/api\/profiles\/([^/]+)\/reconciliation$/)
+  if (req.method === 'GET' && profileReconciliationMatch) {
+    const profileId = decodeURIComponent(profileReconciliationMatch[1])
+    const exists = database.prepare('SELECT 1 FROM profiles WHERE id = ?').get(profileId)
+    if (!exists) return send(res, 404, { error: 'Perfil no encontrado.' }, origin)
+    return send(res, 200, { matches: listProfileReconciliation(profileId) }, origin)
+  }
+
+  const profileTransactionAmountsMatch = url.pathname.match(/^\/api\/profiles\/([^/]+)\/transaction-amounts$/)
+  if (req.method === 'GET' && profileTransactionAmountsMatch) {
+    const profileId = decodeURIComponent(profileTransactionAmountsMatch[1])
+    const exists = database.prepare('SELECT 1 FROM profiles WHERE id = ?').get(profileId)
+    if (!exists) return send(res, 404, { error: 'Perfil no encontrado.' }, origin)
+    return send(res, 200, { amounts: listProfileTransactionAmounts(profileId) }, origin)
+  }
 
     if (req.method === 'PUT' && url.pathname.startsWith('/api/profiles/')) {
       if (!req.headers['content-type']?.startsWith('application/json')) return send(res, 415, { error: 'Content-Type debe ser application/json.' }, origin)
@@ -285,4 +343,5 @@ const server = createServer(async (req, res) => {
 server.listen(port, lanMode ? '0.0.0.0' : '127.0.0.1', () => {
   console.log(`Finanzas OS API on http://127.0.0.1:${port}`)
   console.log(`SQLite file: ${dbPath}`)
+  if (!process.env.FINANZAS_API_TOKEN) console.log(`Clave de acceso para esta sesion: ${accessToken}`)
 })

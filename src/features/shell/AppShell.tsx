@@ -12,6 +12,7 @@ import {
 import { lazy, Suspense } from 'react'
 import type { FinancialMetrics } from '../../domain/finance'
 import type { FinancialProfile } from '../../domain/types'
+import type { ReviewedDocumentFields } from '../../lib/importers'
 import type { GoalFormState } from '../goals/goalFormModel'
 import { CreateProfileDialog, type CreateProfileMode } from '../profiles/CreateProfileDialog'
 import { ActiveProfileBar, EmptyProfilesState, ProfileSwitcher } from '../profiles/ProfileManagement'
@@ -158,51 +159,22 @@ export function EmptyWorkspace({
   )
 }
 
-export function MainAppShell({
-  activeTab,
-  canResetProfile,
-  profiles,
-  currentProfile,
-  metrics,
-  asOfDate,
-  reportingPeriod,
-  creation,
-  pendingDeleteProfileId,
-  pendingDeleteAllProfiles,
-  profileMessage,
-  importMessage,
-  isImporting,
-  importQueue,
-  onSwitchTab,
-  onProfileChange,
-  onOpenCreateProfile,
-  onOpenDashboardForProfile,
-  onRestoreExamples,
-  onResetProfile,
-  onDeleteProfile,
-  onDeleteAllProfiles,
-  onUpdateProfile,
-  onFiles,
-  onReanalyzePersistedDocuments,
-  onApplyReviewedDocumentMovements,
-  onCreateGoalFromPlanning,
-  onReportingPeriodChange,
-}: {
+export interface ShellNavigationState {
   activeTab: AppTab
+  asOfDate: string
+  reportingPeriod: string
+  onSwitchTab: (tab: AppTab) => void
+  onReportingPeriodChange: (period: string) => void
+}
+
+export interface ShellProfileState {
   canResetProfile: boolean
   profiles: FinancialProfile[]
   currentProfile: FinancialProfile
-  metrics: FinancialMetrics
-  asOfDate: string
-  reportingPeriod: string
   creation: ProfileCreationState
   pendingDeleteProfileId: string
   pendingDeleteAllProfiles: boolean
   profileMessage: string
-  importMessage: string
-  isImporting: boolean
-  importQueue: string[]
-  onSwitchTab: (tab: AppTab) => void
   onProfileChange: (id: string, targetTab?: 'dashboard') => void
   onOpenCreateProfile: (mode?: CreateProfileMode) => void
   onOpenDashboardForProfile: (id?: string) => void
@@ -211,12 +183,54 @@ export function MainAppShell({
   onDeleteProfile: (id: string) => void
   onDeleteAllProfiles: () => void
   onUpdateProfile: (profile: FinancialProfile) => void
+  onCreateGoalFromPlanning: () => void
+}
+
+export interface ShellDocumentState {
+  importMessage: string
+  isImporting: boolean
+  importQueue: string[]
   onFiles: (files: File[], mode: 'current' | 'new') => void
   onReanalyzePersistedDocuments: () => void
-  onApplyReviewedDocumentMovements: (documentId: string) => void
-  onCreateGoalFromPlanning: () => void
-  onReportingPeriodChange: (period: string) => void
-}) {
+  onApplyReviewedDocumentMovements: (documentId: string, fields?: ReviewedDocumentFields) => void
+}
+
+interface MainAppShellProps {
+  navigation: ShellNavigationState
+  profile: ShellProfileState
+  documents: ShellDocumentState
+  metrics: FinancialMetrics
+}
+
+export function MainAppShell({ navigation, profile, documents, metrics }: MainAppShellProps) {
+  const { activeTab, asOfDate, reportingPeriod, onReportingPeriodChange, onSwitchTab } = navigation
+  const {
+    canResetProfile,
+    creation,
+    currentProfile,
+    onCreateGoalFromPlanning,
+    onDeleteAllProfiles,
+    onDeleteProfile,
+    onOpenCreateProfile,
+    onOpenDashboardForProfile,
+    onProfileChange,
+    onResetProfile,
+    onRestoreExamples,
+    onUpdateProfile,
+    pendingDeleteAllProfiles,
+    pendingDeleteProfileId,
+    profileMessage,
+    profiles,
+  } = profile
+  const {
+    importMessage,
+    importQueue,
+    isImporting,
+    onApplyReviewedDocumentMovements,
+    onFiles,
+    onReanalyzePersistedDocuments,
+  } = documents
+
   const section = sectionCopy[activeTab]
   return (
     <main className="app-shell">
@@ -355,7 +369,7 @@ export function MainAppShell({
               onOpenPlanning={() => onSwitchTab('planning')}
             />
           )}
-          {activeTab === 'capture' && <Capture profile={currentProfile} asOfDate={asOfDate} onChange={onUpdateProfile} />}
+          {activeTab === 'capture' && <Capture key={currentProfile.id} profile={currentProfile} asOfDate={asOfDate} onChange={onUpdateProfile} />}
           {activeTab === 'planning' && <Planning profile={currentProfile} metrics={metrics} onCreateGoal={onCreateGoalFromPlanning} />}
           {activeTab === 'imports' && (
             <Imports

@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
+
+const testAccessToken = 'synthetic-playwright-access-token-0001'
+const apiHeaders = { authorization: `Bearer ${testAccessToken}` }
 import { readFileSync } from 'node:fs'
 import { exampleProfiles } from '../../src/domain/exampleData'
 import type { FinancialProfile } from '../../src/domain/types'
@@ -12,11 +15,12 @@ async function restoreExamples(page: Page) {
 }
 
 async function seedExampleProfiles(page: Page) {
-  const deleteResponse = await page.request.delete('/api/profiles')
+  const deleteResponse = await page.request.delete('/api/profiles', { headers: apiHeaders })
   expect(deleteResponse.ok()).toBe(true)
 
   for (const profile of exampleProfiles) {
     const response = await page.request.put(`/api/profiles/${encodeURIComponent(profile.id)}`, {
+      headers: apiHeaders,
       data: profile,
     })
     expect(response.ok()).toBe(true)
@@ -47,7 +51,7 @@ async function expectNoProfilesOrDashboard(page: Page) {
   await expect(page.getByText('Ahorro saludable')).toHaveCount(0)
   await expect(page.getByText('Metas grandes')).toHaveCount(0)
   await expect(page.locator('.profile-card')).toHaveCount(0)
-  const profilesResponse = await page.request.get('/api/profiles')
+  const profilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   expect(profilesResponse.ok()).toBe(true)
   const body = (await profilesResponse.json()) as { profiles: unknown[] }
   expect(body.profiles).toHaveLength(0)
@@ -115,6 +119,7 @@ function payrollCfdiXml(total: number, paymentDate: string) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript((token) => window.sessionStorage.setItem('finanzas-api-access-token', token), testAccessToken)
   await resetProfilesToExamples(page)
 })
 
@@ -153,7 +158,7 @@ test('restores an example only from its dashboard and confirms the result', asyn
     accounts: [],
     transactions: [],
   }
-  const updateResponse = await page.request.put(`/api/profiles/${encodeURIComponent(modifiedExample.id)}`, { data: modifiedExample })
+  const updateResponse = await page.request.put(`/api/profiles/${encodeURIComponent(modifiedExample.id)}`, { headers: apiHeaders, data: modifiedExample })
   expect(updateResponse.ok()).toBe(true)
   await page.goto('/')
 
@@ -164,7 +169,7 @@ test('restores an example only from its dashboard and confirms the result', asyn
   await activeProfile.getByRole('button', { name: 'Restaurar demo' }).click()
   await expect(page.getByText('Datos de ejemplo restaurados para este espacio.')).toBeVisible()
 
-  const profilesResponse = await page.request.get('/api/profiles')
+  const profilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   const body = (await profilesResponse.json()) as { profiles: FinancialProfile[] }
   const restored = body.profiles.find((profile) => profile.id === exampleProfiles[0].id)
   expect(restored?.accounts).toEqual(exampleProfiles[0].accounts)
@@ -226,6 +231,7 @@ test('blocks the workspace instead of rehydrating IndexedDB when SQLite is unava
 
 test('rejects malformed, oversized, and non-local API requests', async ({ page }) => {
   const invalidProfile = await page.request.put('/api/profiles/invalid', {
+    headers: apiHeaders,
     data: { id: 'invalid', name: 'Perfil incompleto' },
   })
   expect(invalidProfile.status()).toBe(400)
@@ -236,18 +242,20 @@ test('rejects malformed, oversized, and non-local API requests', async ({ page }
   expect(rejectedOrigin.status()).toBe(403)
 
   const oversizedPayload = await page.request.post('/api/knowledge/explain', {
+    headers: apiHeaders,
     data: { text: 'x'.repeat(2 * 1024 * 1024) },
   })
   expect(oversizedPayload.status()).toBe(413)
 
   const invalidKnowledge = await page.request.post('/api/knowledge/explain', {
+    headers: apiHeaders,
     data: { text: 42 },
   })
   expect(invalidKnowledge.status()).toBe(400)
   expect(invalidKnowledge.headers()['content-type']).toMatch(/application\/json/)
   expect((await invalidKnowledge.json()).error).toBe('Solicitud de explicacion invalida.')
 
-  const missingProfile = await page.request.delete('/api/profiles/profile-that-does-not-exist')
+  const missingProfile = await page.request.delete('/api/profiles/profile-that-does-not-exist', { headers: apiHeaders })
   expect(missingProfile.status()).toBe(404)
 })
 
@@ -420,7 +428,7 @@ test('records a card purchase and payment without double-counting the debt', asy
   await movementPanel.getByLabel('Comercio / origen').fill('Pago tarjeta E2E')
   await movementPanel.getByRole('button', { name: /Guardar movimiento/i }).click()
 
-  const profilesResponse = await page.request.get('/api/profiles')
+  const profilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   const body = (await profilesResponse.json()) as { profiles: FinancialProfile[] }
   const saved = body.profiles.find((profile) => profile.name === 'E2E Tarjeta')
   expect(saved?.accounts.find((account) => account.name === 'E2E Nómina')?.balance).toBe(9900)
@@ -607,9 +615,10 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   await expect(page.getByLabel('Plan de mejora de datos documentales')).toBeVisible()
   await expect(page.getByText('Prioridad de captura')).toBeVisible()
   await expect(page.locator('[data-testid="document-detail-table"][open]')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /Reanalizar documentos guardados/i })).toBeVisible()
-  await page.getByRole('button', { name: /Reanalizar documentos guardados/i }).click()
+  await expect(page.getByRole('button', { name: /Actualizar diagnóstico guardado/i })).toBeVisible()
+  await page.getByRole('button', { name: /Actualizar diagnóstico guardado/i }).click()
   await expect(page.getByText(/Reanalisis local actualizado|ya estaban alineados/i)).toBeVisible()
+  await expect(page.getByText(/Reanalisis local actualizado en 12 documento\(s\)/i)).toBeVisible()
   await expect(page.getByLabel('Estado de captura de documentos')).toContainText('Extractor actual')
 
   const bankStatementDocument = documentCards
@@ -645,6 +654,15 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   await expect(page.getByText(/no duplica el dashboard/i).first()).toBeVisible()
   await expect(page.getByText(/confianza/i).first()).toBeVisible()
   await expect(page.getByText(/OCR local/i).first()).toBeVisible()
+  const receiptCard = page.locator('[data-testid="imported-document-card"][data-document-kind="purchase_receipt"]').first()
+  await expect(receiptCard).toHaveAttribute('data-document-status', 'needs_review')
+  await receiptCard.getByLabel('Comercio', { exact: true }).fill('Comercio confirmado')
+  await receiptCard.getByLabel('Fecha del recibo').fill('2026-06-09')
+  await receiptCard.getByLabel('Total del recibo').fill('120.00')
+  await receiptCard.getByRole('button', { name: 'Confirmar y aplicar gasto' }).click()
+  await expect(receiptCard).toHaveAttribute('data-document-status', 'processed')
+  await expect(receiptCard.getByRole('button', { name: 'Confirmar y aplicar gasto' })).toHaveCount(0)
+
   const payrollXmlCard = page
     .locator('[data-testid="imported-document-card"][data-document-kind="payroll_cfdi"]')
     .filter({ hasText: /XML · Nomina CFDI/i })
@@ -675,7 +693,7 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   await expect(cardPdf.getByText(/PDF · Tarjetas de credito · needs_review/i)).toBeVisible()
   await expect(cardPdf.getByText(/Campos clave:/)).toBeVisible()
   await expect(cardPdf.getByText('Conciliacion tarjeta')).toBeVisible()
-  await expect(cardPdf.getByText('cuadra')).toBeVisible()
+  await expect(cardPdf.locator('.document-reconciliation-preview')).toContainText('cuadra')
   await expect(cardPdf.getByText('Diferencia conciliacion')).toBeVisible()
   await expect(cardPdf.getByText('$0').first()).toBeVisible()
   await expect(cardPdf.getByText('Movimientos de tarjeta para revisar')).toBeVisible()
@@ -768,9 +786,9 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   })
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('19 mov.')
   await expect(page.locator('[aria-label="Perfil activo"]')).toContainText('12 doc(s)')
-  await expect(page.getByText(/Reanalisis local actualizado en 12 documento\(s\)/i)).toBeVisible()
 
-  const profilesResponse = await page.request.get('/api/profiles')
+
+  const profilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   expect(profilesResponse.ok()).toBe(true)
   const profilesBody = (await profilesResponse.json()) as { profiles: FinancialProfile[] }
   const importedProfile = profilesBody.profiles.find((profile) =>
@@ -969,7 +987,7 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   await expect(page.getByText(/1 archivo\(s\) procesados/i)).toBeVisible({ timeout: 30_000 })
   await expect(recentDocuments).not.toContainText(/estado-cuenta-tarjeta-(renombrado|demo)\.pdf/i)
 
-  const reimportProfilesResponse = await page.request.get('/api/profiles')
+  const reimportProfilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   expect(reimportProfilesResponse.ok()).toBe(true)
   const reimportProfilesBody = (await reimportProfilesResponse.json()) as { profiles: FinancialProfile[] }
   const reimportedProfile = reimportProfilesBody.profiles.find((profile) =>
@@ -989,7 +1007,7 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   await expect(reimportedCardPdf.getByText(/Movimientos PDF aplicados: 7/i)).toBeVisible()
   await expect(reimportedCardPdf.getByRole('button', { name: /Aplicar movimientos revisados/i })).toHaveCount(0)
 
-  const approvedCardProfilesResponse = await page.request.get('/api/profiles')
+  const approvedCardProfilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   expect(approvedCardProfilesResponse.ok()).toBe(true)
   const approvedCardProfilesBody = (await approvedCardProfilesResponse.json()) as { profiles: FinancialProfile[] }
   const approvedCardProfile = approvedCardProfilesBody.profiles.find((profile) =>
@@ -1046,7 +1064,7 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
       },
     ])
   await expect(page.getByText(/1 archivo\(s\) procesados/i)).toBeVisible({ timeout: 30_000 })
-  const refreshedCardProfilesResponse = await page.request.get('/api/profiles')
+  const refreshedCardProfilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   expect(refreshedCardProfilesResponse.ok()).toBe(true)
   const refreshedCardProfilesBody = (await refreshedCardProfilesResponse.json()) as { profiles: FinancialProfile[] }
   const refreshedCardProfile = refreshedCardProfilesBody.profiles.find((profile) =>
@@ -1237,7 +1255,7 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   await expect(nuPdf.getByText(/Movimientos PDF aplicados: 8/i)).toBeVisible()
   await expect(nuPdf.getByRole('button', { name: /Aplicar movimientos revisados/i })).toHaveCount(0)
 
-  const approvedProfilesResponse = await page.request.get('/api/profiles')
+  const approvedProfilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   expect(approvedProfilesResponse.ok()).toBe(true)
   const approvedProfilesBody = (await approvedProfilesResponse.json()) as { profiles: FinancialProfile[] }
   const approvedProfile = approvedProfilesBody.profiles.find((profile) =>
@@ -1259,6 +1277,13 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   expect(approvedProfile?.transactions.filter((transaction) => transaction.merchant === 'PAGO TARJETA COMPACTA DEMO' && transaction.type === 'debt_payment')).toHaveLength(1)
   expect(approvedProfile?.transactions.filter((transaction) => transaction.merchant === 'RETIRO ATM COMPACTO' && transaction.type === 'expense')).toHaveLength(1)
   expect(approvedProfile?.accounts.find((account) => account.name.includes('Nu Mexico'))?.balance).toBe(95000)
+  const approvedReceipt = approvedProfile?.importedDocuments.find((document) => document.kind === 'purchase_receipt')
+  expect(approvedReceipt?.extracted?.reviewedMovementRowsApproval).toBe('manual_user_action')
+  expect(approvedProfile?.transactions.filter((transaction) => transaction.merchant === 'Comercio confirmado')).toHaveLength(1)
+  await page.reload()
+  await page.locator('nav').getByRole('button', { name: 'Documentos' }).click()
+  await expect(page.locator('[data-testid="imported-document-card"][data-document-kind="purchase_receipt"]').first()).toHaveAttribute('data-document-status', 'processed')
+
 })
 
 test('deduplicates payroll CFDI against split bank deposits with date and cent tolerance', async ({ page }) => {
@@ -1290,7 +1315,7 @@ test('deduplicates payroll CFDI against split bank deposits with date and cent t
   await expect(page.getByText(/1 archivo\(s\) procesados/i)).toBeVisible({ timeout: 30_000 })
   await expect(page.getByText(/no duplica el dashboard/i).first()).toBeVisible()
 
-  const profilesResponse = await page.request.get('/api/profiles')
+  const profilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   expect(profilesResponse.ok()).toBe(true)
   const profilesBody = (await profilesResponse.json()) as { profiles: FinancialProfile[] }
   const importedProfile = profilesBody.profiles.find((profile) =>
@@ -1362,7 +1387,7 @@ test('deduplicates split payroll deposits when CFDI was imported first', async (
   ])
   await expect(page.getByText(/1 archivo\(s\) procesados/i)).toBeVisible({ timeout: 30_000 })
 
-  const profilesResponse = await page.request.get('/api/profiles')
+  const profilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   expect(profilesResponse.ok()).toBe(true)
   const profilesBody = (await profilesResponse.json()) as { profiles: FinancialProfile[] }
   const importedProfile = profilesBody.profiles.find((profile) =>
@@ -1462,4 +1487,23 @@ test('shows privacy controls and local-data messaging', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Minimizacion' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Protección pendiente' })).toBeVisible()
   await expect(page.getByText(/activa cifrado fuerte/i)).toBeVisible()
+})
+
+
+test('requires pairing and rejects forged origin through the Vite proxy', async ({ page, context }) => {
+  const response = await page.request.get('/api/profiles', { headers: { origin: 'http://localhost:5173' } })
+  expect(response.status()).toBe(401)
+  const pairingPage = await context.newPage()
+  await pairingPage.goto('/')
+  await expect(pairingPage.getByRole('heading', { name: 'Conecta con tus finanzas' })).toBeVisible()
+  await pairingPage.getByLabel('Clave de acceso').fill('incorrecta')
+  await pairingPage.getByRole('button', { name: 'Conectar', exact: true }).click()
+  await expect(pairingPage.getByLabel('Clave de acceso')).toHaveValue('')
+  await expect(pairingPage.getByRole('heading', { name: 'Conecta con tus finanzas' })).toBeVisible()
+  await pairingPage.getByLabel('Clave de acceso').fill(testAccessToken)
+  await pairingPage.getByRole('button', { name: 'Conectar', exact: true }).click()
+  await expect(pairingPage.locator('[aria-label="Perfiles financieros"]')).toBeVisible()
+  await pairingPage.reload()
+  await expect(pairingPage.locator('[aria-label="Perfiles financieros"]')).toBeVisible()
+  await pairingPage.close()
 })

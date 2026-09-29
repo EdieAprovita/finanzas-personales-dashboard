@@ -12,6 +12,10 @@ export interface FinancialMetrics {
   period: string
   asOfDate: string
   netWorth: number
+  assets: number
+  liabilities: number
+  liquidNetWorth: number
+  debtToAssets: number
   liquidCash: number
   essentialExpenses: number
   cashFlow: number
@@ -190,6 +194,8 @@ export function calculateMetrics(profile: FinancialProfile, context: FinancialMe
   const netWorth = isHistoricalPeriod ? latest.netWorth : assets - liabilities
   const historicalLiquidCash = latest.liquidCash
   const liquidCash = isHistoricalPeriod && typeof historicalLiquidCash === 'number' ? historicalLiquidCash : isHistoricalPeriod ? Number.NaN : currentLiquidCash
+  const liquidNetWorth = isHistoricalPeriod ? Number.NaN : currentLiquidCash - liabilities
+  const debtToAssets = isHistoricalPeriod ? Number.NaN : safeRatio(liabilities, assets, Number.NaN)
   const essentialExpenses = averageEssentialExpenses(profile, period)
   const totalOutflows = latest.expenses + latest.debtPayments
   const cashFlow = latest.income - totalOutflows
@@ -375,6 +381,20 @@ export function calculateMetrics(profile: FinancialProfile, context: FinancialMe
       availability: hasPeriodData && netIncomeBase > 0 ? 'ready' : 'limited',
     },
     {
+      label: 'Patrimonio líquido',
+      value: Number.isFinite(liquidNetWorth) ? mxn(liquidNetWorth) : 'Sin datos',
+      helper: 'Activos de alta liquidez menos todos los pasivos; no incluye inmueble, vehículo, retiro ni inversión restringida.',
+      status: statusBy(liquidNetWorth, (n) => n > 0, (n) => n === 0),
+      availability: isHistoricalPeriod ? 'limited' : profile.accounts.length || profile.debts.length ? 'ready' : 'unavailable',
+    },
+    {
+      label: 'Pasivos / activos',
+      value: Number.isFinite(debtToAssets) ? pct(debtToAssets) : 'Sin datos',
+      helper: 'Proporción de tus activos totales respaldada por deuda.',
+      status: statusBy(debtToAssets, (n) => n < 0.35, (n) => n < 0.6),
+      availability: Number.isFinite(debtToAssets) ? (isHistoricalPeriod ? 'limited' : 'ready') : 'unavailable',
+    },
+    {
       label: 'Runway liquido',
       value: Number.isFinite(runwayMonths) ? runwayMonths > 36 ? '>36 meses' : `${runwayMonths.toFixed(1)} meses` : 'Sin datos',
       helper: Number.isFinite(runwayMonths)
@@ -398,6 +418,10 @@ export function calculateMetrics(profile: FinancialProfile, context: FinancialMe
     period,
     asOfDate,
     netWorth,
+    assets,
+    liabilities,
+    liquidNetWorth,
+    debtToAssets,
     liquidCash,
     essentialExpenses,
     cashFlow,

@@ -5,7 +5,7 @@ const currencySchema = z.enum(['MXN', 'USD'])
 const accountSchema = z.object({
   id: z.string().min(1).max(160),
   name: z.string().min(1).max(160),
-  type: z.enum(['checking', 'savings', 'investment', 'retirement', 'credit_card', 'loan', 'property', 'vehicle']),
+  type: z.enum(['checking', 'savings', 'investment', 'retirement', 'credit_card', 'loan', 'property', 'vehicle', 'receivable', 'business', 'other_asset']),
   balance: z.number().finite(),
   currency: currencySchema,
   creditLimit: z.number().finite().nonnegative().optional(),
@@ -100,6 +100,13 @@ const importedDocumentSchema = z.object({
   kind: z.enum(['credit_card_statement', 'payroll_cfdi', 'bank_statement', 'investment_statement', 'invoice_cfdi', 'purchase_receipt', 'unknown']).optional(),
   detectedInstitution: z.string().max(240).optional(),
   confidence: z.number().finite().min(0).max(1).optional(),
+  extractorVersion: z.string().max(64).optional(),
+  sourceHash: z.string().max(256).optional(),
+  sourceBlobPath: z.string().max(1000).optional(),
+  periodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  currency: currencySchema.optional(),
+  fieldConfidences: z.record(z.string(), z.number().finite().min(0).max(1)).optional(),
   classificationReasons: z.array(z.string().max(300)).max(100).optional(),
   extracted: z.record(z.string(), z.unknown()).optional(),
   sourceTransactionIds: z.array(z.string().max(160)).max(10000).optional(),
@@ -144,12 +151,17 @@ function finiteNumber(value) {
 
 function migrateImportedDocument(document) {
   const extracted = document?.extracted && typeof document.extracted === 'object' ? document.extracted : {}
-  if (extracted.schema !== 'amex_account_activity_mx') return document
+  const normalizedDocument = {
+    ...document,
+    sourceHash: document?.sourceHash ?? document?.documentFingerprint,
+    currency: document?.currency ?? extracted.currency ?? extracted.detectedCurrency,
+  }
+  if (extracted.schema !== 'amex_account_activity_mx') return normalizedDocument
   const rows = finiteNumber(extracted.cardActivityRows) || finiteNumber(extracted.rows) || finiteNumber(extracted.appliedRows)
   const usableRows = Math.max(0, rows - finiteNumber(extracted.skippedRows))
   const complete = rows > 0 && usableRows > 0
   return {
-    ...document,
+    ...normalizedDocument,
     extracted: {
       ...extracted,
       documentSubtype: 'credit_card_statement.card_activity',

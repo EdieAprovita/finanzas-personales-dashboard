@@ -17,10 +17,39 @@ Aplicacion local para centralizar informacion financiera personal, calcular salu
 ```bash
 npm install
 npm run api
+npm run dev
 npm run dev:mobile
 npm run build
 npm run lint
 ```
+
+`npm run dev` inicia Vite y la API local en paralelo. Vite queda disponible en
+`http://localhost:5173/` y la API en `http://127.0.0.1:4147/`; al detener el
+comando se detienen ambos procesos.
+
+## Grafo Local Del Proyecto
+
+Graphify se ejecuta en un entorno Python aislado del proyecto; no requiere una
+instalación global ni usa los documentos financieros cargados por la app. La
+primera vez instala la herramienta local:
+
+```bash
+npm run graphify:setup
+npm run graphify:check
+npm run graphify:code
+```
+
+`graphify:code` indexa únicamente código con extracción local y genera
+`graphify-out/`. Para otros comandos de Graphify se reenvían los argumentos:
+
+```bash
+npm run graphify -- query "¿Qué módulos persisten perfiles?"
+npm run graphify -- diagnose multigraph --graph graphify-out/graph.json
+```
+
+El entorno `.graphify-venv/` y los artefactos `graphify-out/` son locales y no
+se versionan. No ejecutes una extracción semántica sobre documentos reales sin
+revisar primero el proveedor de IA y la política de datos.
 
 ## CI/CD
 
@@ -32,7 +61,7 @@ La app no puede desplegarse como sitio estático: el frontend necesita la API No
 
 Para usarla desde tu celular o desde otro navegador en la misma red, deja corriendo `npm run api:lan` en una terminal y `npm run dev:mobile` en otra. Abre la URL LAN que imprime Vite, por ejemplo `http://192.168.x.x:5173/`. El navegador usa rutas `/api`; Vite las reenvia a la API local en tu computadora.
 
-En modo LAN la API escucha en todas las interfaces y acepta orígenes IPv4 privados (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`). Para un hostname o puerto adicional puedes configurar `FINANZAS_ALLOWED_ORIGINS=http://mi-host:5173 npm run api:lan`. CORS no reemplaza autenticacion; usa este modo solo en una red privada confiable y detenlo al terminar.
+En modo LAN la API escucha en todas las interfaces y acepta orígenes IPv4 privados (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`). Para un hostname o puerto adicional puedes configurar `FINANZAS_ALLOWED_ORIGINS=http://mi-host:5173 npm run api:lan`. Todas las rutas de datos requieren una clave de acceso, incluso en modo local y a traves de Vite o preview. Al arrancar, la API genera una clave y la muestra en su terminal; introducela en la app una vez por pestaña. Reiniciar la API cambia la clave. Para fijarla, configura FINANZAS_API_TOKEN con al menos 32 bytes desde tu entorno privado; no uses variables VITE_*, URLs ni archivos versionados. HTTP no cifra datos ni credenciales: limita LAN a una red privada confiable y usa HTTPS si necesitas cifrado en transporte. Deten el modo LAN al terminar.
 
 ## Funcionalidad Implementada
 
@@ -89,3 +118,17 @@ data/finanzas-os.sqlite
 ```
 
 La primera ejecucion de `npm run api` crea la base, activa WAL y siembra la matriz de conocimiento interna.
+
+## Trazabilidad documental
+
+Además del perfil compatible en `profiles.data_json`, las migraciones SQLite crean proyecciones normalizadas:
+
+- `documents`, `document_fields` y `document_rows` conservan fuente, periodo, moneda, confianza y estado de revisión.
+- `reconciliation_matches` registra la relación entre filas documentales y movimientos del perfil.
+- `transaction_amounts` conserva importes en unidades menores (`amount_minor`) para evitar errores de punto flotante.
+
+Las migraciones son incrementales y se registran en `schema_migrations`. Los endpoints locales `GET /api/profiles/:id/documents`, `GET /api/profiles/:id/reconciliation` y `GET /api/profiles/:id/transaction-amounts` exponen estas proyecciones para auditoría. La copia del archivo original solo se marca como disponible cuando la ruta existe y apunta a un archivo; el importador actual todavía no copia automáticamente archivos crudos.
+
+Los perfiles existentes generan estas proyecciones al volver a guardarse; sus datos originales permanecen en `profiles.data_json`. La conciliación solo marca una coincidencia cuando la moneda también coincide.
+
+Para validar la persistencia local, ejecuta `npm run test:db`.

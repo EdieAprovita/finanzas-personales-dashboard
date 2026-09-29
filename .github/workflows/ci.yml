@@ -81,6 +81,9 @@ jobs:
           PYTHON: python
         run: npm run test:imports
 
+      - name: Validate SQLite schema
+        run: npm run test:db
+
       - name: Build production bundle
         run: npm run build
 

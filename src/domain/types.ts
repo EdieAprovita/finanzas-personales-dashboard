@@ -7,11 +7,15 @@ export type AccountType =
   | 'loan'
   | 'property'
   | 'vehicle'
+  | 'receivable'
+  | 'business'
+  | 'other_asset'
 
 export type TransactionType = 'income' | 'expense' | 'transfer' | 'debt_payment'
 export type GoalType = 'savings' | 'travel' | 'small_purchase' | 'large_purchase' | 'home' | 'vehicle' | 'emergency' | 'debt'
 export type GoalPriority = 'high' | 'medium' | 'low'
 export type Status = 'green' | 'yellow' | 'red'
+export type Currency = 'MXN' | 'USD'
 export const PROFILE_SCHEMA_VERSION = 2
 export type DocumentKind =
   | 'credit_card_statement'
@@ -27,7 +31,7 @@ export interface Account {
   name: string
   type: AccountType
   balance: number
-  currency: 'MXN' | 'USD'
+  currency: Currency
   creditLimit?: number
 }
 
@@ -39,7 +43,7 @@ export interface InvestmentPosition {
   quantity?: number
   price?: number
   marketValue: number
-  currency: 'MXN' | 'USD'
+  currency: Currency
   unrealizedGain?: number
   asOfDate: string
   sourceDocumentId?: string
@@ -70,7 +74,7 @@ export interface Debt {
   creditLimit?: number
   cutoffDate?: string
   paymentToAvoidInterest?: number
-  currency?: 'MXN' | 'USD'
+  currency?: Currency
   dueDate: string
 }
 
@@ -82,7 +86,7 @@ export interface Goal {
   currentSaved: number
   targetDate: string
   plannedMonthlyContribution: number
-  currency?: 'MXN' | 'USD'
+  currency?: Currency
   priority?: GoalPriority
   targetCoverageMonths?: number
   evidenceLabel?: string
@@ -126,6 +130,13 @@ export interface ImportedDocument {
   kind?: DocumentKind
   detectedInstitution?: string
   confidence?: number
+  extractorVersion?: string
+  sourceHash?: string
+  sourceBlobPath?: string
+  periodStart?: string
+  periodEnd?: string
+  currency?: Currency
+  fieldConfidences?: Record<string, number>
   classificationReasons?: string[]
   extracted?: Record<string, unknown>
   sourceTransactionIds?: string[]

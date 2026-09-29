@@ -27,6 +27,8 @@ test-results
 # Local analysis artifacts
 .gitnexus/
 reports/*.png
+graphify-out/
+.graphify-venv/
 
 # Editor directories and files
 .vscode/*
