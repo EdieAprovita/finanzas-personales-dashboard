@@ -9,7 +9,7 @@ import {
   Target,
   Upload,
 } from 'lucide-react'
-import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from 'react'
+import { Component, lazy, Suspense, useEffect, useRef, type ErrorInfo, type ReactNode } from 'react'
 import type { FinancialMetrics } from '../../domain/finance'
 import type { FinancialProfile } from '../../domain/types'
 import type { ReviewedDocumentFields } from '../../lib/importers'
@@ -212,6 +212,7 @@ export interface ShellProfileState {
   onDeleteProfile: (id: string) => void
   onDeleteAllProfiles: () => void
   onUpdateProfile: (profile: FinancialProfile) => Promise<void>
+  onCloseReportingPeriod: (balanceAsOf: string) => Promise<void>
   onCreateGoalFromPlanning: () => void
 }
 
@@ -244,6 +245,7 @@ export function MainAppShell({ navigation, profile, documents, metrics }: MainAp
     onDeleteProfile,
     onOpenCreateProfile,
     onOpenDashboardForProfile,
+    onCloseReportingPeriod,
     onProfileChange,
     onResetProfile,
     onRestoreExamples,
@@ -265,6 +267,12 @@ export function MainAppShell({ navigation, profile, documents, metrics }: MainAp
   } = documents
 
   const section = sectionCopy[activeTab]
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const previousTabRef = useRef(activeTab)
+  useEffect(() => {
+    if (previousTabRef.current !== activeTab) headingRef.current?.focus()
+    previousTabRef.current = activeTab
+  }, [activeTab])
   const workspaceMessageIsAlert = /otra pestana|recarga el perfil|excede el limite de persistencia/i.test(profileMessage)
   const showWorkspaceMessage =
     activeTab !== 'profiles' && activeTab !== 'capture' &&
@@ -329,7 +337,7 @@ export function MainAppShell({ navigation, profile, documents, metrics }: MainAp
         <header className="topbar">
           <div>
             <p className="eyebrow">{activeTab === 'profiles' ? 'Organización financiera' : profileDisplayName(currentProfile, profiles)}</p>
-            <h1>{section.title}</h1>
+            <h1 ref={headingRef} tabIndex={-1}>{section.title}</h1>
             <p>{section.description}</p>
           </div>
           <div className="topbar-actions">
@@ -402,6 +410,7 @@ export function MainAppShell({ navigation, profile, documents, metrics }: MainAp
               metrics={metrics}
               reportingPeriod={reportingPeriod}
               onReportingPeriodChange={onReportingPeriodChange}
+              onCloseReportingPeriod={onCloseReportingPeriod}
               onStartCapture={() => onSwitchTab('capture')}
               onCreateFromDocuments={() => onSwitchTab('imports')}
               onOpenPlanning={() => onSwitchTab('planning')}

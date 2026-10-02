@@ -14,7 +14,7 @@ export interface ProfileRepository {
   reportingPeriod: string
   setReportingPeriod: (period: string) => void
   updateReportingPeriod: (profile: FinancialProfile) => void
-  loadProfiles: () => Promise<void>
+  loadProfiles: () => Promise<boolean>
   activateProfile: (profile: FinancialProfile) => void
   selectProfile: (id: string) => FinancialProfile | undefined
   persistProfile: (profile: FinancialProfile, options?: { operation?: 'import_batch' }) => Promise<void>
@@ -31,6 +31,7 @@ function storageUnavailableError(): Error {
 export function useProfileRepository(asOfDate: string): ProfileRepository {
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
   const revisionsRef = useRef(new Map<string, number>())
+  const collectionEtagRef = useRef('')
   const [undoableImportProfileIds, setUndoableImportProfileIds] = useState(new Set<string>())
   const [activeProfileId, setActiveProfileId] = useState('')
   const [profiles, setProfiles] = useState<FinancialProfile[]>([])
@@ -63,19 +64,20 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
     [asOfDate],
   )
 
-  const loadProfiles = useCallback(async (): Promise<void> => {
+  const loadProfiles = useCallback(async (): Promise<boolean> => {
     try {
       await getApiHealth()
       setApiStatus('sqlite')
-      const { profiles: apiProfiles, revisions, importUndos } = await getProfiles()
+      const { profiles: apiProfiles, revisions, importUndos, collectionEtag } = await getProfiles()
       revisionsRef.current = new Map(Object.entries(revisions))
+      collectionEtagRef.current = collectionEtag
       setUndoableImportProfileIds(new Set(Object.keys(importUndos)))
 
       if (apiProfiles.length === 0) {
         revisionsRef.current.clear()
         setProfiles([])
         setActiveProfileId('')
-        return
+        return true
       }
 
       const hydratedProfiles = apiProfiles.map(migrateFinancialProfile)
@@ -86,8 +88,10 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
         setReportingPeriod(latestReportingPeriod(selected, asOfDate.slice(0, 7)))
         return selected.id
       })
+      return true
     } catch (error) {
       setApiStatus(error instanceof ApiAuthenticationError ? 'authentication_required' : 'blocked')
+      return false
     }
   }, [asOfDate])
 
@@ -99,6 +103,7 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
         try {
           const saved = await saveProfile(profile, revisionsRef.current.get(profile.id), options?.operation)
           revisionsRef.current.set(profile.id, saved.revision)
+          collectionEtagRef.current = saved.collectionEtag
           profile = migrateFinancialProfile(saved.profile)
           setUndoableImportProfileIds((current) => {
             const next = new Set(current)
@@ -131,6 +136,7 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
     let result: Awaited<ReturnType<typeof undoLatestImport>>
     try {
       result = await undoLatestImport(id, revision)
+      collectionEtagRef.current = result.collectionEtag
     } catch (error) {
       if (error instanceof ApiAuthenticationError) setApiStatus('authentication_required')
       throw error
@@ -164,7 +170,8 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
       try {
         const revision = revisionsRef.current.get(id)
         if (!revision) throw new Error('Recarga el perfil antes de eliminarlo.')
-        await deleteProfile(id, revision)
+        const result = await deleteProfile(id, revision)
+        collectionEtagRef.current = result.collectionEtag
         revisionsRef.current.delete(id)
       } catch (error) {
         if (error instanceof ApiAuthenticationError) setApiStatus('authentication_required')
@@ -194,13 +201,15 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
     if (apiStatus !== 'sqlite') throw storageUnavailableError()
 
     try {
-      await deleteAllProfiles()
+      if (!collectionEtagRef.current) throw new Error('Recarga los perfiles antes de eliminarlos.')
+      await deleteAllProfiles(collectionEtagRef.current)
     } catch (error) {
       if (error instanceof ApiAuthenticationError) setApiStatus('authentication_required')
       throw error
     }
     setProfiles([])
     revisionsRef.current.clear()
+    collectionEtagRef.current = ''
     setUndoableImportProfileIds(new Set())
     setActiveProfileId('')
   }, [apiStatus])

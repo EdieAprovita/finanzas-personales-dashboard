@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { mxn } from '../../domain/finance'
 import type { GoalType } from '../../domain/types'
 import { goalFormEstimate, goalIcons, goalTypeHelpers, goalTypeLabels, type GoalFormState } from './goalFormModel'
@@ -16,6 +17,16 @@ export function GoalForm({
   onChange: (goal: GoalFormState) => void
 }) {
   const estimate = goalFormEstimate(goal, asOfDate)
+  const errorId = useId()
+  const invalidField = !error ? ''
+    : /nombre/.test(error) ? 'name'
+      : /objetivo mayor/.test(error) ? 'targetAmount'
+        : /avance actual/.test(error) ? 'currentSaved'
+          : /aportacion mensual/.test(error) ? 'plannedMonthlyContribution'
+            : 'targetDate'
+  const invalidProps = (field: string) => invalidField === field
+    ? { 'aria-invalid': true as const, 'aria-describedby': errorId }
+    : {}
   const typeOptions: GoalType[] = ['emergency', 'savings', 'travel', 'small_purchase', 'large_purchase', 'home', 'vehicle', 'debt']
 
   function update(next: Partial<GoalFormState>) {
@@ -50,7 +61,7 @@ export function GoalForm({
       <div className="form-grid goals">
         <label>
           Nombre
-          <input value={goal.name} onChange={(event) => update({ name: event.target.value })} placeholder="Fondo emergencia 6 meses" />
+          <input {...invalidProps('name')} value={goal.name} onChange={(event) => update({ name: event.target.value })} placeholder="Fondo emergencia 6 meses" />
         </label>
         <label>
           Prioridad
@@ -62,19 +73,20 @@ export function GoalForm({
         </label>
         <label>
           {goal.type === 'home' || goal.type === 'vehicle' ? 'Enganche / objetivo' : 'Monto objetivo'}
-          <input inputMode="decimal" value={goal.targetAmount} onChange={(event) => update({ targetAmount: event.target.value })} placeholder="180000" />
+          <input {...invalidProps('targetAmount')} inputMode="decimal" value={goal.targetAmount} onChange={(event) => update({ targetAmount: event.target.value })} placeholder="180000" />
         </label>
         <label>
           {goal.type === 'debt' ? 'Pago reservado' : 'Ya tengo'}
-          <input inputMode="decimal" value={goal.currentSaved} onChange={(event) => update({ currentSaved: event.target.value })} placeholder="45000" />
+          <input {...invalidProps('currentSaved')} inputMode="decimal" value={goal.currentSaved} onChange={(event) => update({ currentSaved: event.target.value })} placeholder="45000" />
         </label>
         <label>
           {goal.type === 'travel' ? 'Fecha de salida' : 'Fecha objetivo'}
-          <input type="date" value={goal.targetDate} onChange={(event) => update({ targetDate: event.target.value })} />
+          <input {...invalidProps('targetDate')} type="date" value={goal.targetDate} onChange={(event) => update({ targetDate: event.target.value })} />
         </label>
         <label>
           Aportacion mensual planeada
           <input
+            {...invalidProps('plannedMonthlyContribution')}
             inputMode="decimal"
             value={goal.plannedMonthlyContribution}
             onChange={(event) => update({ plannedMonthlyContribution: event.target.value })}
@@ -100,7 +112,7 @@ export function GoalForm({
           <small>Estimado a {estimate.months} mes(es) para llegar a la fecha.</small>
         </div>
       )}
-      {error && <p className="form-error" role="alert">{error}</p>}
+      {error && <p id={errorId} className="form-error" role="alert">{error}</p>}
     </div>
   )
 }

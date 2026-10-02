@@ -2298,7 +2298,7 @@ summary:focus-visible {
 }
 
 .knowledge-list strong {
-  color: var(--green);
+  color: #047857;
   font-size: 14px;
 }
 
@@ -3214,6 +3214,32 @@ summary:focus-visible {
   background: #fff;
 }
 
+.monthly-close {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 16px;
+}
+
+.monthly-close h2,
+.monthly-close p {
+  margin: 0;
+}
+
+.monthly-close-status,
+.monthly-close-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.monthly-close-actions label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .score-details summary {
   cursor: pointer;
   font-weight: 800;
@@ -3661,5 +3687,22 @@ summary:focus-visible {
   .chart-md {
     height: 300px;
     min-height: 300px;
+  }
+}
+
+@media (max-width: 959px) {
+  .monthly-close,
+  .empty-workspace,
+  .empty-workspace .empty-profile-state {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .monthly-close-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .empty-workspace .data-warning {
+    grid-column: 1;
   }
 }

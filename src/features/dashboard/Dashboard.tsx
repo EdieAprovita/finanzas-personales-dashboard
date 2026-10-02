@@ -10,6 +10,7 @@ export function Dashboard({
   metrics,
   reportingPeriod,
   onReportingPeriodChange,
+  onCloseReportingPeriod,
   onStartCapture,
   onCreateFromDocuments,
   onOpenPlanning,
@@ -35,12 +36,14 @@ export function Dashboard({
   return (
     <div className="dashboard-grid">
       <DashboardReportSummary
+        key={reportingPeriod}
         profile={profile}
         metrics={metrics}
         periods={periods}
         reportingPeriod={reportingPeriod}
         facts={facts}
         onReportingPeriodChange={onReportingPeriodChange}
+        onCloseReportingPeriod={onCloseReportingPeriod}
         onCreateFromDocuments={onCreateFromDocuments}
         onOpenPlanning={onOpenPlanning}
       />

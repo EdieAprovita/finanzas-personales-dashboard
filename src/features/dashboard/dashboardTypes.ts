@@ -6,6 +6,7 @@ export interface DashboardProps {
   metrics: FinancialMetrics
   reportingPeriod: string
   onReportingPeriodChange: (period: string) => void
+  onCloseReportingPeriod: (balanceAsOf: string) => Promise<void>
   onStartCapture: () => void
   onCreateFromDocuments: () => void
   onOpenPlanning: () => void

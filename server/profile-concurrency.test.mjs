@@ -170,6 +170,72 @@ test('profile revisions prevent stale writes and deletes', async () => {
     assert.equal(oversized.status, 413)
     const afterOversized = await fetch(`${base}/api/profiles`, { headers })
     assert.deepEqual((await afterOversized.json()).profiles, [])
+
+    const collectionProfiles = [
+      { ...profile('Coleccion A'), id: 'collection-a' },
+      { ...profile('Coleccion B'), id: 'collection-b' },
+    ]
+    for (const candidate of collectionProfiles) {
+      const response = await fetch(`${base}/api/profiles/${candidate.id}`, {
+        method: 'PUT',
+        headers: { ...headers, 'if-none-match': '*' },
+        body: JSON.stringify(candidate),
+      })
+      assert.equal(response.status, 200)
+    }
+
+    const staleCollection = await fetch(`${base}/api/profiles`, { headers })
+    const staleCollectionBody = await staleCollection.json()
+    assert.match(staleCollectionBody.collectionEtag, /^"profiles-[a-f0-9]{64}"$/)
+
+    const collectionUpdate = await fetch(`${base}/api/profiles/collection-a`, {
+      method: 'PUT',
+      headers: { ...headers, 'if-match': '"profile-1"' },
+      body: JSON.stringify({ ...collectionProfiles[0], name: 'Coleccion A actualizada' }),
+    })
+    assert.equal(collectionUpdate.status, 200)
+
+    const deleteWithoutPrecondition = await fetch(`${base}/api/profiles`, { method: 'DELETE', headers })
+    assert.equal(deleteWithoutPrecondition.status, 428)
+
+    const staleCollectionDelete = await fetch(`${base}/api/profiles`, {
+      method: 'DELETE',
+      headers: { ...headers, 'if-match': staleCollectionBody.collectionEtag },
+    })
+    assert.equal(staleCollectionDelete.status, 409)
+    assert.equal((await staleCollectionDelete.json()).code, 'PROFILE_COLLECTION_CONFLICT')
+
+    const freshCollection = await fetch(`${base}/api/profiles`, { headers })
+    const freshCollectionBody = await freshCollection.json()
+    assert.equal(freshCollectionBody.profiles.length, 2)
+    assert.equal(freshCollectionBody.profiles.find((row) => row.id === 'collection-a').name, 'Coleccion A actualizada')
+
+    const abaDelete = await fetch(`${base}/api/profiles/collection-b`, {
+      method: 'DELETE',
+      headers: { ...headers, 'if-match': '"profile-1"' },
+    })
+    assert.equal(abaDelete.status, 200)
+    const abaRecreate = await fetch(`${base}/api/profiles/collection-b`, {
+      method: 'PUT',
+      headers: { ...headers, 'if-none-match': '*' },
+      body: JSON.stringify(collectionProfiles[1]),
+    })
+    assert.equal(abaRecreate.status, 200)
+    const abaCollectionDelete = await fetch(`${base}/api/profiles`, {
+      method: 'DELETE',
+      headers: { ...headers, 'if-match': freshCollectionBody.collectionEtag },
+    })
+    assert.equal(abaCollectionDelete.status, 409)
+
+    const refreshedCollection = await fetch(`${base}/api/profiles`, { headers })
+    const refreshedCollectionBody = await refreshedCollection.json()
+
+    const freshCollectionDelete = await fetch(`${base}/api/profiles`, {
+      method: 'DELETE',
+      headers: { ...headers, 'if-match': refreshedCollectionBody.collectionEtag },
+    })
+    assert.equal(freshCollectionDelete.status, 200)
+    assert.equal((await freshCollectionDelete.json()).deletedCount, 2)
   } finally {
     if (child.exitCode === null) {
       child.kill('SIGTERM')

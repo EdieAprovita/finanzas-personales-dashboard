@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, CircleAlert, RotateCcw, ShieldCheck } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   assessInvestorEducation,
   type DrawdownResponse,
@@ -161,6 +161,11 @@ export function InvestmentProfileInterview(): ReactNode {
   const [step, setStep] = useState(0)
   const [answers, setAnswers] = useState<DraftAnswers>({})
   const [showResult, setShowResult] = useState(false)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+
+  useEffect(() => {
+    if (started) headingRef.current?.focus()
+  }, [showResult, started, step])
   const question = questions[step]
 
   if (!question) return null
@@ -199,7 +204,7 @@ export function InvestmentProfileInterview(): ReactNode {
       <section className="panel wide" aria-labelledby="investment-profile-result-title">
         <div className="panel-heading">
           <div>
-            <h2 id="investment-profile-result-title">Resultado educativo</h2>
+            <h2 id="investment-profile-result-title" ref={headingRef} tabIndex={-1}>Resultado educativo</h2>
             <p>Es una lectura de tus respuestas, no una instrucción para comprar, vender o asignar productos.</p>
           </div>
           <ShieldCheck size={24} />
@@ -234,7 +239,7 @@ export function InvestmentProfileInterview(): ReactNode {
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Pregunta {step + 1} de {questions.length}</p>
-          <h2 id="investment-profile-question-title">{question.title}</h2>
+          <h2 id="investment-profile-question-title" ref={headingRef} tabIndex={-1}>{question.title}</h2>
           <p>{question.prompt}</p>
         </div>
         <ShieldCheck size={24} />

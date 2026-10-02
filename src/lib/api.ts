@@ -74,8 +74,8 @@ async function request<T>(path: string, init?: RequestInit, schema?: z.ZodType<T
       maxBytes?: number
     } | null
     const message = body?.error ?? `API local respondio ${response.status}`
-    if (response.status === 409 && body?.code === 'PROFILE_CONFLICT') {
-      throw new ProfileConflictError(message, body.currentRevision)
+    if (response.status === 409 && ['PROFILE_CONFLICT', 'PROFILE_COLLECTION_CONFLICT'].includes(body?.code ?? '')) {
+      throw new ProfileConflictError(message, body?.currentRevision)
     }
     if (response.status === 413) throw new ProfileTooLargeError(message, body?.maxBytes)
     throw new Error(message)
@@ -93,11 +93,12 @@ export async function getProfiles() {
     profiles: FinancialProfile[]
     revisions: Record<string, number>
     importUndos: Record<string, { batchId: string; revision: number; createdAt: string }>
+    collectionEtag: string
   }>('/api/profiles')
 }
 
 export async function saveProfile(profile: FinancialProfile, revision?: number, operation?: 'import_batch') {
-  return request<{ profile: FinancialProfile; revision: number }>(`/api/profiles/${encodeURIComponent(profile.id)}`, {
+  return request<{ profile: FinancialProfile; revision: number; collectionEtag: string }>(`/api/profiles/${encodeURIComponent(profile.id)}`, {
     method: 'PUT',
     body: JSON.stringify(profile),
     headers: revision
@@ -107,22 +108,23 @@ export async function saveProfile(profile: FinancialProfile, revision?: number, 
 }
 
 export async function undoLatestImport(id: string, revision: number) {
-  return request<{ deleted: boolean; profile?: FinancialProfile; revision?: number }>(
+  return request<{ deleted: boolean; profile?: FinancialProfile; revision?: number; collectionEtag: string }>(
     `/api/profiles/${encodeURIComponent(id)}/import-undo`,
     { method: 'POST', headers: { 'if-match': `"profile-${revision}"` } },
   )
 }
 
 export async function deleteProfile(id: string, revision: number) {
-  return request<{ ok: boolean }>(`/api/profiles/${encodeURIComponent(id)}`, {
+  return request<{ ok: boolean; collectionEtag: string }>(`/api/profiles/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     headers: { 'if-match': `"profile-${revision}"` },
   })
 }
 
-export async function deleteAllProfiles() {
+export async function deleteAllProfiles(collectionEtag: string) {
   return request<{ ok: boolean; deletedCount: number }>('/api/profiles', {
     method: 'DELETE',
+    headers: { 'if-match': collectionEtag },
   })
 }
 

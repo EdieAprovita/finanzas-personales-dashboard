@@ -2,6 +2,12 @@ import { z } from 'zod'
 
 const currencySchema = z.enum(['MXN', 'USD'])
 
+const civilDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}, 'Fecha civil invalida.')
+
 const accountSchema = z.object({
   id: z.string().min(1).max(160),
   name: z.string().min(1).max(160),
@@ -79,12 +85,21 @@ const snapshotSchema = z.object({
   debtPayments: z.number().finite().nonnegative(),
   savings: z.number().finite(),
   netWorth: z.number().finite(),
+  balanceAsOf: civilDateSchema.optional(),
+  reconciledAt: z.string().datetime().optional(),
   liquidCash: z.number().finite().nonnegative().optional(),
   debtBalance: z.number().finite().nonnegative().optional(),
   debtMinimumPayments: z.number().finite().nonnegative().optional(),
   cardBalance: z.number().finite().nonnegative().optional(),
   cardLimit: z.number().finite().nonnegative().optional(),
   sourceDocumentIds: z.array(z.string().min(1).max(240)).max(100).optional(),
+}).superRefine((snapshot, context) => {
+  if (Boolean(snapshot.balanceAsOf) !== Boolean(snapshot.reconciledAt)) {
+    context.addIssue({ code: 'custom', message: 'balanceAsOf y reconciledAt deben guardarse juntos.' })
+  }
+  if (snapshot.balanceAsOf && snapshot.balanceAsOf.slice(0, 7) !== snapshot.month) {
+    context.addIssue({ code: 'custom', path: ['balanceAsOf'], message: 'balanceAsOf debe pertenecer al mes del snapshot.' })
+  }
 })
 
 const importedDocumentSchema = z.object({

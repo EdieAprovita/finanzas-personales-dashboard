@@ -125,6 +125,11 @@ function listProfileRevisions() {
   return Object.fromEntries(database.prepare('SELECT id, revision FROM profiles').all().map((row) => [row.id, Number(row.revision)]))
 }
 
+function profileCollectionEtag(revisions = listProfileRevisions()) {
+  const mutationCount = Number(database.prepare("SELECT COUNT(*) AS count FROM audit_log WHERE entity_type = 'profile'").get()?.count ?? 0)
+  return `"profiles-${sha256(JSON.stringify({ mutationCount, revisions: Object.entries(revisions).sort(([left], [right]) => left.localeCompare(right)) }))}"`
+}
+
 function listProfileImportUndos() {
   return Object.fromEntries(
     database.prepare('SELECT profile_id, batch_id, applied_revision, created_at FROM profile_import_undo').all()
@@ -279,12 +284,17 @@ function rollbackLatestImport(profileId, ifMatch) {
   }
 }
 
-function deleteAllProfiles() {
-  const row = database.prepare('SELECT COUNT(*) AS count FROM profiles').get()
-  const deletedCount = Number(row?.count ?? 0)
-  database.exec('BEGIN')
+function deleteAllProfiles(ifMatch) {
+  if (typeof ifMatch !== 'string') {
+    throw requestError(428, 'PROFILE_PRECONDITION_REQUIRED', 'Recarga los perfiles antes de eliminarlos.')
+  }
+
+  database.exec('BEGIN IMMEDIATE')
   try {
-    database.prepare('DELETE FROM profiles').run()
+    if (ifMatch !== profileCollectionEtag()) {
+      throw requestError(409, 'PROFILE_COLLECTION_CONFLICT', 'Otra pestana modifico los perfiles. Recarga antes de eliminarlos.')
+    }
+    const deletedCount = Number(database.prepare('DELETE FROM profiles').run().changes)
     writeAudit('profile', 'all', 'delete_all', { deletedCount })
     database.exec('COMMIT')
     return deletedCount
@@ -398,7 +408,9 @@ const server = createServer(async (req, res) => {
   if (!isAuthenticated(req)) return send(res, 401, { error: 'Introduce la clave de acceso de la API para abrir tus datos.' }, origin)
 
     if (req.method === 'GET' && url.pathname === '/api/profiles') {
-      return send(res, 200, { profiles: listProfiles(), revisions: listProfileRevisions(), importUndos: listProfileImportUndos() }, origin)
+      const revisions = listProfileRevisions()
+      const collectionEtag = profileCollectionEtag(revisions)
+      return send(res, 200, { profiles: listProfiles(), revisions, importUndos: listProfileImportUndos(), collectionEtag }, origin, { etag: collectionEtag })
   }
 
   const profileDocumentsMatch = url.pathname.match(/^\/api\/profiles\/([^/]+)\/documents$/)
@@ -432,18 +444,18 @@ const server = createServer(async (req, res) => {
       if (!profile?.id || !profile?.name || profile.id !== profileId) return send(res, 400, { error: 'Perfil invalido.' }, origin)
       const operation = req.headers['x-finanzas-operation'] === 'import_batch' ? 'import_batch' : undefined
       const saved = upsertProfile(profile, req.headers['if-match'], req.headers['if-none-match'], operation)
-      return send(res, 200, saved, origin, { etag: profileEtag(saved.revision) })
+      return send(res, 200, { ...saved, collectionEtag: profileCollectionEtag() }, origin, { etag: profileEtag(saved.revision) })
     }
 
     const importUndoMatch = url.pathname.match(/^\/api\/profiles\/([^/]+)\/import-undo$/)
     if (req.method === 'POST' && importUndoMatch) {
       const profileId = decodeURIComponent(importUndoMatch[1])
       const result = rollbackLatestImport(profileId, req.headers['if-match'])
-      return send(res, 200, result, origin, result.revision ? { etag: profileEtag(result.revision) } : {})
+      return send(res, 200, { ...result, collectionEtag: profileCollectionEtag() }, origin, result.revision ? { etag: profileEtag(result.revision) } : {})
     }
 
     if (req.method === 'DELETE' && url.pathname === '/api/profiles') {
-      const deletedCount = deleteAllProfiles()
+      const deletedCount = deleteAllProfiles(req.headers['if-match'])
       return send(res, 200, { ok: true, deletedCount }, origin)
     }
 
@@ -459,7 +471,7 @@ const server = createServer(async (req, res) => {
       const result = database.prepare('DELETE FROM profiles WHERE id = ? AND revision = ?').run(id, expectedRevision)
       if (result.changes === 0) return send(res, 409, { error: 'Otra pestana modifico este perfil. Recarga antes de eliminarlo.', code: 'PROFILE_CONFLICT' }, origin)
       writeAudit('profile', id, 'delete', {})
-      return send(res, 200, { ok: true }, origin)
+      return send(res, 200, { ok: true, collectionEtag: profileCollectionEtag() }, origin)
     }
 
     if (req.method === 'GET' && url.pathname === '/api/knowledge') {

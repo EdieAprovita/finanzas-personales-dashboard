@@ -15,7 +15,9 @@ async function restoreExamples(page: Page) {
 }
 
 async function seedExampleProfiles(page: Page) {
-  const deleteResponse = await page.request.delete('/api/profiles', { headers: apiHeaders })
+  const current = await page.request.get('/api/profiles', { headers: apiHeaders })
+  const { collectionEtag } = await current.json() as { collectionEtag: string }
+  const deleteResponse = await page.request.delete('/api/profiles', { headers: { ...apiHeaders, 'if-match': collectionEtag } })
   expect(deleteResponse.ok()).toBe(true)
 
   for (const profile of exampleProfiles) {
@@ -208,6 +210,41 @@ test('blocks a stale tab and keeps the first saved change', async ({ page, conte
   const body = (await profilesResponse.json()) as { profiles: FinancialProfile[] }
   const savedProfile = body.profiles.find((profile) => profile.accounts.some((account) => account.name === 'Cuenta vigente E2E'))
   expect(savedProfile?.accounts.some((account) => account.name === 'Cuenta obsoleta E2E')).toBe(false)
+})
+
+test('keeps every profile when another tab changes before global deletion', async ({ page, context }) => {
+  const stalePage = await context.newPage()
+  await stalePage.addInitScript((token) => window.sessionStorage.setItem('finanzas-api-access-token', token), testAccessToken)
+  await stalePage.goto('/')
+
+  await page.getByRole('button', { name: 'Borrar todos los perfiles' }).click()
+  await stalePage.locator('.profile-card').first().getByRole('button', { name: /Abrir resumen/i }).click()
+  await stalePage.getByLabel('Registrar').click()
+  await stalePage.getByPlaceholder('Cuenta nómina').fill('Cuenta concurrente E2E')
+  await stalePage.getByPlaceholder('25000').fill('1000')
+  await stalePage.getByRole('button', { name: 'Agregar cuenta' }).click()
+  await expect(stalePage.locator('.recent-ledger').getByText('Cuenta concurrente E2E')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Confirmar borrar todos los perfiles' }).click()
+  await expect(page.getByText(/Otra pestana modifico los perfiles/i)).toBeVisible()
+  await expect(page.locator('.profile-card')).toHaveCount(exampleProfiles.length)
+  const profilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
+  const body = await profilesResponse.json() as { profiles: FinancialProfile[] }
+  expect(body.profiles.some((profile) => profile.accounts.some((account) => account.name === 'Cuenta concurrente E2E'))).toBe(true)
+  await stalePage.close()
+})
+
+test('confirms and persists a monthly close', async ({ page }) => {
+  await page.locator('.profile-card', { hasText: 'Ahorro saludable' }).getByRole('button', { name: /Abrir resumen/i }).click()
+  const closePanel = page.getByRole('region', { name: 'Cierre mensual' })
+  const period = await page.locator('.dashboard-period-bar strong').textContent()
+  await closePanel.getByRole('button', { name: 'Revisar cierre mensual' }).click()
+  await expect(closePanel.getByRole('alert')).toContainText('Confirma que revisaste los movimientos')
+  await closePanel.getByRole('button', { name: new RegExp(`Confirmar cierre de ${period}`) }).click()
+  await expect(closePanel.getByText(/Cerrado con saldos al/i)).toBeVisible()
+
+  await page.reload()
+  await expect(page.getByRole('region', { name: 'Cierre mensual' }).getByText(/Cerrado con saldos al/i)).toBeVisible()
 })
 
 test('switches the financial history range from dashboard controls', async ({ page }) => {
@@ -1539,6 +1576,8 @@ test('requires pairing and rejects forged origin through the Vite proxy', async 
   await pairingPage.getByLabel('Clave de acceso').fill('incorrecta')
   await pairingPage.getByRole('button', { name: 'Conectar', exact: true }).click()
   await expect(pairingPage.getByLabel('Clave de acceso')).toHaveValue('')
+  await expect(pairingPage.getByRole('alert')).toContainText('La clave es incorrecta')
+  await expect(pairingPage.getByLabel('Clave de acceso')).toBeFocused()
   await expect(pairingPage.getByRole('heading', { name: 'Conecta con tus finanzas' })).toBeVisible()
   await pairingPage.getByLabel('Clave de acceso').fill(testAccessToken)
   await pairingPage.getByRole('button', { name: 'Conectar', exact: true }).click()
@@ -1554,9 +1593,10 @@ test('keeps the active section in the URL and restores browser history', async (
   await expect(page).toHaveURL(/section=dashboard/)
   await page.locator('.tabs').getByRole('button', { name: 'Registrar' }).click()
   await expect(page).toHaveURL(/section=capture/)
+  await expect(page.getByRole('heading', { name: 'Registrar actividad' })).toBeFocused()
   await page.goBack()
   await expect(page).toHaveURL(/section=dashboard/)
-  await expect(page.getByRole('heading', { name: 'Resumen financiero' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Resumen financiero' })).toBeFocused()
   await page.goForward()
   await expect(page.getByRole('heading', { name: 'Registrar actividad' })).toBeVisible()
 
@@ -1591,6 +1631,18 @@ test('keeps capture controls accessible at 320 px', async ({ page }, testInfo) =
   expect(sizes.length).toBeGreaterThan(4)
   expect(sizes.every((size) => size.width >= 44 && size.height >= 44)).toBe(true)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('keeps empty state within tablet viewport', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-chrome', 'Comprobacion de reflow en viewport controlado.')
+  await page.getByRole('button', { name: 'Borrar todos los perfiles' }).click()
+  await page.getByRole('button', { name: 'Confirmar borrar todos los perfiles' }).click()
+  await expectNoProfilesOrDashboard(page)
+
+  for (const width of [720, 768]) {
+    await page.setViewportSize({ width, height: 900 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  }
 })
 
 test('undoes only the latest imported batch', async ({ page }) => {

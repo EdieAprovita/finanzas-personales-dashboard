@@ -1,12 +1,14 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import {
   AlertTriangle,
+  CheckCircle2,
   CircleDollarSign,
   FolderOpen,
   Gauge,
   Landmark,
 } from 'lucide-react'
 import type { FinancialMetrics } from '../../domain/finance'
+import { monthlyCloseBlockers } from '../../domain/snapshots'
 import type { FinancialProfile } from '../../domain/types'
 import { statusLabel } from '../../domain/status'
 import { analyzeDocumentQuality } from '../imports/documentQuality'
@@ -19,6 +21,7 @@ interface DashboardReportSummaryProps {
   reportingPeriod: string
   facts: ReturnType<typeof profileFacts>
   onReportingPeriodChange: (period: string) => void
+  onCloseReportingPeriod: (balanceAsOf: string) => Promise<void>
   onCreateFromDocuments: () => void
   onOpenPlanning: () => void
 }
@@ -30,6 +33,7 @@ export function DashboardReportSummary({
   reportingPeriod,
   facts,
   onReportingPeriodChange,
+  onCloseReportingPeriod,
   onCreateFromDocuments,
   onOpenPlanning,
 }: DashboardReportSummaryProps) {
@@ -42,6 +46,36 @@ export function DashboardReportSummary({
   const constrainedGoals = metrics.goalReadiness.filter(
     (goal) => goal.status === 'red' && !goal.isComplete,
   )
+  const snapshot = profile.monthlySnapshots.find((row) => row.month === reportingPeriod)
+  const closeBlockers = useMemo(
+    () => monthlyCloseBlockers(profile, reportingPeriod, metrics.asOfDate),
+    [metrics.asOfDate, profile, reportingPeriod],
+  )
+  const isClosed = Boolean(snapshot?.reconciledAt && closeBlockers.length === 0)
+  const monthEnd = `${reportingPeriod}-${String(new Date(Date.UTC(Number(reportingPeriod.slice(0, 4)), Number(reportingPeriod.slice(5, 7)), 0)).getUTCDate()).padStart(2, '0')}`
+  const maxBalanceDate = reportingPeriod === metrics.asOfDate.slice(0, 7) ? metrics.asOfDate : monthEnd
+  const [balanceAsOf, setBalanceAsOf] = useState(maxBalanceDate)
+  const [confirmingClose, setConfirmingClose] = useState(false)
+  const [closeMessage, setCloseMessage] = useState('')
+  const [closing, setClosing] = useState(false)
+
+  async function closePeriod() {
+    if (!confirmingClose) {
+      setConfirmingClose(true)
+      setCloseMessage(`Confirma que revisaste los movimientos y que los saldos están actualizados al ${balanceAsOf}.`)
+      return
+    }
+    setClosing(true)
+    try {
+      await onCloseReportingPeriod(balanceAsOf)
+      setConfirmingClose(false)
+      setCloseMessage('Cierre guardado en la base local.')
+    } catch (error) {
+      setCloseMessage(error instanceof Error ? error.message : 'No se pudo cerrar el periodo.')
+    } finally {
+      setClosing(false)
+    }
+  }
 
   return (
     <>
@@ -59,7 +93,14 @@ export function DashboardReportSummary({
           Ver periodo
           <select
             value={reportingPeriod}
-            onChange={(event) => onReportingPeriodChange(event.target.value)}
+            onChange={(event) => {
+              const period = event.target.value
+              const periodEnd = `${period}-${String(new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0)).getUTCDate()).padStart(2, '0')}`
+              setBalanceAsOf(period === metrics.asOfDate.slice(0, 7) ? metrics.asOfDate : periodEnd)
+              setConfirmingClose(false)
+              setCloseMessage('')
+              onReportingPeriodChange(period)
+            }}
           >
             {periods.map((period) => (
               <option key={period} value={period}>
@@ -68,6 +109,34 @@ export function DashboardReportSummary({
             ))}
           </select>
         </label>
+      </section>
+
+      <section className="panel wide monthly-close" aria-labelledby="monthly-close-title">
+        <div>
+          <p className="eyebrow">Conciliación</p>
+          <h2 id="monthly-close-title">Cierre mensual</h2>
+          {isClosed ? (
+            <p className="monthly-close-status"><CheckCircle2 size={18} /> Cerrado con saldos al {snapshot?.balanceAsOf}.</p>
+          ) : (
+            <p>{closeBlockers.length ? closeBlockers.join(' ') : 'Revisa movimientos y confirma la fecha efectiva de tus saldos.'}</p>
+          )}
+        </div>
+        {!isClosed && (
+          <div className="monthly-close-actions">
+            <label>
+              Saldos actualizados al
+              <input type="date" min={`${reportingPeriod}-01`} max={maxBalanceDate} value={balanceAsOf} onChange={(event) => {
+                setBalanceAsOf(event.target.value)
+                setConfirmingClose(false)
+                setCloseMessage('')
+              }} />
+            </label>
+            <button type="button" className="ghost primary" disabled={closing || closeBlockers.length > 0} onClick={() => void closePeriod()}>
+              {closing ? 'Guardando...' : confirmingClose ? `Confirmar cierre de ${reportingPeriod}` : 'Revisar cierre mensual'}
+            </button>
+          </div>
+        )}
+        {closeMessage && <p className="profile-message" role={confirmingClose ? 'alert' : 'status'} aria-live={confirmingClose ? 'assertive' : 'polite'}>{closeMessage}</p>}
       </section>
 
       {metrics.excludedForeignAccountCount > 0 && (

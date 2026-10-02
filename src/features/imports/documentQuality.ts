@@ -1,3 +1,4 @@
+import { documentNeedsReconciliation } from '../../domain/documentReconciliation'
 import type { DocumentKind, FinancialProfile, ImportedDocument } from '../../domain/types'
 import { documentFieldLabel, documentKindLabels, documentSubtypeForExtracted, expectedFieldSpecsForExtracted } from '../../lib/documentFieldSpecs'
 
@@ -446,15 +447,7 @@ function analyzeDocumentRisk(profile: FinancialProfile): DocumentRiskProfile {
   const skippedDuplicateRows = documents.reduce((sum, doc) => sum + numericExtracted(doc, 'skippedDuplicateRows'), 0)
   const skippedSemanticDuplicates = documents.reduce((sum, doc) => sum + numericExtracted(doc, 'skippedSemanticDuplicates'), 0)
   const warningDocuments = documents.filter((doc) => (doc.warnings?.length ?? 0) > 0).length
-  const pendingReconciliation = documents.filter(
-    (doc) =>
-      doc.status === 'needs_review' ||
-      booleanExtracted(doc, 'balancePendingReview') ||
-      numericExtracted(doc, 'skippedRows') > 0 ||
-      numericExtracted(doc, 'unparsedDates') > 0 ||
-      (doc.kind === 'credit_card_statement' && ['mismatch', 'insufficient'].includes(stringExtracted(doc, 'cardReconciliationStatus'))) ||
-      (doc.warnings ?? []).some((warning) => /concili|duplica|revision|pendiente|omit/i.test(warning)),
-  ).length
+  const pendingReconciliation = documents.filter(documentNeedsReconciliation).length
   const duplicateDocumentIds = countDuplicates(documents.map((doc) => doc.id))
   const duplicateTransactionFingerprints = countDuplicates(transactionFingerprint(profile))
   const headline =

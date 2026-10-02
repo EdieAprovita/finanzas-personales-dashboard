@@ -108,6 +108,10 @@ export interface MonthlySnapshot {
   debtPayments: number
   savings: number
   netWorth: number
+  /** Fecha hasta la que el usuario confirmó que los saldos del periodo están actualizados. */
+  balanceAsOf?: string
+  /** Momento en que el usuario confirmó el cierre después de resolver pendientes documentales. */
+  reconciledAt?: string
   /** Balances documentados al cierre del mes. Son opcionales para no inventar historia previa. */
   liquidCash?: number
   debtBalance?: number

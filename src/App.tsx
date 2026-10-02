@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { exampleProfiles } from './domain/exampleData'
 import { calculateMetrics } from './domain/finance'
-import { recalculateLatestSnapshot } from './domain/snapshots'
+import { closeMonthlySnapshot, recalculateLatestSnapshot } from './domain/snapshots'
 import { PROFILE_SCHEMA_VERSION, type FinancialProfile } from './domain/types'
 import { defaultGoalForm, goalFormToGoal, validateGoalForm, type GoalFormState } from './features/goals/goalFormModel'
 import type { CreateProfileMode } from './features/profiles/CreateProfileDialog'
@@ -64,6 +64,9 @@ function App() {
   const [importQueue, setImportQueue] = useState<string[]>([])
   const [profileMessage, setProfileMessage] = useState('')
   const [accessToken, setAccessToken] = useState('')
+  const [accessTokenError, setAccessTokenError] = useState(false)
+  const [isAuthenticating, setIsAuthenticating] = useState(false)
+  const accessTokenRef = useRef<HTMLInputElement>(null)
   const [pendingDeleteProfileId, setPendingDeleteProfileId] = useState('')
   const [pendingDeleteAllProfiles, setPendingDeleteAllProfiles] = useState(false)
   const [isCreateProfileOpen, setIsCreateProfileOpen] = useState(false)
@@ -74,6 +77,10 @@ function App() {
   const [starterGoal, setStarterGoal] = useState<GoalFormState>(() => defaultGoalForm('savings', asOfDate))
   const [starterGoalError, setStarterGoalError] = useState('')
   const [activeTab, setActiveTab] = useState<AppTab>(tabFromLocation)
+
+  useEffect(() => {
+    if (apiStatus === 'authentication_required' && accessTokenError) accessTokenRef.current?.focus()
+  }, [accessTokenError, apiStatus])
 
   const metrics = useMemo(
     () => (currentProfile ? calculateMetrics(currentProfile, { period: reportingPeriod, asOfDate }) : null),
@@ -315,6 +322,21 @@ function App() {
     }
   }
 
+  async function handleCloseReportingPeriod(balanceAsOf: string) {
+    if (!currentProfile) return
+    try {
+      const recalculated = recalculateLatestSnapshot(currentProfile, asOfDate)
+      const closed = closeMonthlySnapshot(recalculated, reportingPeriod, balanceAsOf, new Date().toISOString(), asOfDate)
+      await persistProfile(closed)
+      setProfileMessage(`Periodo ${reportingPeriod} conciliado con saldos al ${balanceAsOf}.`)
+      setImportMessage('')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo cerrar el periodo.'
+      setProfileMessage(message)
+      throw error
+    }
+  }
+
   async function handleApplyReviewedDocumentMovements(documentId: string, fields: ReviewedDocumentFields = {}) {
     if (!currentProfile) return
     try {
@@ -448,19 +470,27 @@ function App() {
   if (apiStatus === 'authentication_required') {
     return (
       <main className="loading blocked-storage">
-        <form className="panel" onSubmit={(event) => {
-          event.preventDefault()
-          setApiAccessToken(accessToken)
-          setAccessToken('')
-          void loadProfiles()
+          <form className="panel" onSubmit={(event) => {
+            event.preventDefault()
+            setAccessTokenError(false)
+            setIsAuthenticating(true)
+            setApiAccessToken(accessToken)
+            setAccessToken('')
+            void loadProfiles()
+              .then((loaded) => setAccessTokenError(!loaded))
+              .finally(() => setIsAuthenticating(false))
         }}>
           <p className="eyebrow">Datos protegidos</p>
           <h1>Conecta con tus finanzas</h1>
           <p>Introduce la clave que aparece en la terminal al iniciar la API. Se conserva solo en esta pestaña.</p>
           <label>Clave de acceso
-            <input autoComplete="off" type="password" required value={accessToken} onChange={(event) => setAccessToken(event.target.value)} />
+            <input ref={accessTokenRef} autoComplete="off" type="password" required value={accessToken} aria-invalid={accessTokenError || undefined} aria-describedby={accessTokenError ? 'access-token-error' : undefined} onChange={(event) => {
+              setAccessToken(event.target.value)
+              setAccessTokenError(false)
+            }} />
           </label>
-          <button type="submit" className="action-button">Conectar</button>
+          {accessTokenError && <p id="access-token-error" className="form-error" role="alert">La clave es incorrecta. Revisa la terminal de la API e intenta de nuevo.</p>}
+          <button type="submit" className="action-button" disabled={isAuthenticating}>{isAuthenticating ? 'Comprobando...' : 'Conectar'}</button>
         </form>
       </main>
     )
@@ -519,8 +549,9 @@ function App() {
         onRestoreExamples: () => void handleRestoreExamples(),
         onResetProfile: () => void handleReset(),
         onDeleteProfile: (id) => void handleDeleteProfile(id),
-        onDeleteAllProfiles: () => void handleDeleteAllProfiles(),
-          onUpdateProfile: updateProfile,
+            onDeleteAllProfiles: () => void handleDeleteAllProfiles(),
+            onUpdateProfile: updateProfile,
+            onCloseReportingPeriod: handleCloseReportingPeriod,
         onCreateGoalFromPlanning: () => {
           switchTab('capture')
           setProfileMessage('Crea una meta y después regresa Planeación para revisar su factibilidad.')
