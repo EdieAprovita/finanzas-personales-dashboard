@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
+import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const token = 'synthetic-concurrency-token-0000001'
@@ -37,14 +38,43 @@ function profile(name) {
   }
 }
 
+function withDocument(value, summary) {
+  return {
+    ...value,
+    importedDocuments: [{
+      id: 'synthetic-document',
+      fileName: 'synthetic.csv',
+      fileType: 'csv',
+      importedAt: '2026-10-02T12:00:00.000Z',
+      status: 'processed',
+      summary,
+      extractedRows: 1,
+    }],
+  }
+}
+
+function documentPayloadRevision(path) {
+  const database = new DatabaseSync(path, { readOnly: true })
+  try {
+    return Number(database.prepare(`
+      SELECT revision
+      FROM profile_document_payloads
+      WHERE profile_id = ? AND position = 0
+    `).get('synthetic-conflict-profile')?.revision ?? 0)
+  } finally {
+    database.close()
+  }
+}
+
 test('profile revisions prevent stale writes and deletes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'finanzas-concurrency-test-'))
+  const databasePath = join(directory, 'synthetic.sqlite')
   const port = await freePort()
   const base = `http://127.0.0.1:${port}`
   const child = spawn(process.execPath, ['server/index.mjs'], {
     env: {
       ...process.env,
-      FINANZAS_DB_PATH: join(directory, 'synthetic.sqlite'),
+      FINANZAS_DB_PATH: databasePath,
       FINANZAS_API_PORT: String(port),
       FINANZAS_API_TOKEN: token,
       FINANZAS_MAX_PROFILE_BYTES: String(2 * 1024 * 1024),
@@ -76,13 +106,15 @@ test('profile revisions prevent stale writes and deletes', async () => {
     assert.equal(create.headers.get('etag'), '"profile-1"')
     assert.equal((await create.json()).revision, 1)
 
+    const beforeImport = withDocument(profile('Guardado A'), 'Documento anterior')
     const firstWrite = await fetch(`${base}/api/profiles/synthetic-conflict-profile`, {
       method: 'PUT',
       headers: { ...headers, 'if-match': '"profile-1"' },
-      body: JSON.stringify(profile('Guardado A')),
+      body: JSON.stringify(beforeImport),
     })
     assert.equal(firstWrite.status, 200)
     assert.equal(firstWrite.headers.get('etag'), '"profile-2"')
+    assert.equal(documentPayloadRevision(databasePath), 1)
 
     const staleWrite = await fetch(`${base}/api/profiles/synthetic-conflict-profile`, {
       method: 'PUT',
@@ -107,10 +139,11 @@ test('profile revisions prevent stale writes and deletes', async () => {
     const imported = await fetch(`${base}/api/profiles/synthetic-conflict-profile`, {
       method: 'PUT',
       headers: { ...headers, 'if-match': '"profile-2"', 'x-finanzas-operation': 'import_batch' },
-      body: JSON.stringify(profile('Importado')),
+      body: JSON.stringify(withDocument(profile('Importado'), 'Documento importado')),
     })
     assert.equal(imported.status, 200)
     assert.equal((await imported.json()).revision, 3)
+    assert.equal(documentPayloadRevision(databasePath), 2)
     const withUndo = await fetch(`${base}/api/profiles`, { headers })
     assert.equal((await withUndo.json()).importUndos['synthetic-conflict-profile'].revision, 3)
 
@@ -123,6 +156,8 @@ test('profile revisions prevent stale writes and deletes', async () => {
     const afterUndo = await fetch(`${base}/api/profiles`, { headers })
     const afterUndoBody = await afterUndo.json()
     assert.equal(afterUndoBody.profiles[0].name, 'Guardado A')
+    assert.deepEqual(afterUndoBody.profiles[0].importedDocuments, beforeImport.importedDocuments)
+    assert.equal(documentPayloadRevision(databasePath), 3)
     assert.equal(afterUndoBody.importUndos['synthetic-conflict-profile'], undefined)
 
     const staleDelete = await fetch(`${base}/api/profiles/synthetic-conflict-profile`, {

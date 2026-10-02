@@ -7,8 +7,10 @@ import {
   listProfileDocuments,
   listProfileReconciliation,
   listProfileTransactionAmounts,
+  profileDataJson,
   rowToKnowledge,
   rowToProfile,
+  syncProfileDocumentPayloads,
   syncProfileDocuments,
   writeAudit,
 } from './db.mjs'
@@ -104,7 +106,7 @@ function isAllowedRequest(req) {
 
 function listProfiles() {
   return database
-    .prepare('SELECT data_json FROM profiles ORDER BY updated_at DESC')
+    .prepare('SELECT id, data_json, documents_storage_version FROM profiles ORDER BY updated_at DESC')
     .all()
     .flatMap((row) => {
       try {
@@ -170,7 +172,25 @@ function upsertProfile(profile, ifMatch, ifNoneMatch, operation) {
 
   database.exec('BEGIN IMMEDIATE')
   try {
-    const existing = database.prepare('SELECT revision, data_json FROM profiles WHERE id = ?').get(validatedProfile.id)
+    const existing = database.prepare(`
+      SELECT id, revision, data_json, documents_storage_version
+      FROM profiles
+      WHERE id = ?
+    `).get(validatedProfile.id)
+    const existingProfile = existing ? migrateProfile(rowToProfile(existing)) : null
+    const previousDataJson = operation === 'import_batch' && existingProfile
+      ? JSON.stringify(existingProfile)
+      : null
+    const storedDataJson = profileDataJson(validatedProfile)
+    const shouldSyncDocuments = Number(existing?.documents_storage_version ?? 0) === 0 || !existingProfile || JSON.stringify([
+      existingProfile.accounts,
+      existingProfile.transactions,
+      existingProfile.importedDocuments,
+    ]) !== JSON.stringify([
+      validatedProfile.accounts,
+      validatedProfile.transactions,
+      validatedProfile.importedDocuments,
+    ])
     let revision
 
     if (existing) {
@@ -193,10 +213,11 @@ function upsertProfile(profile, ifMatch, ifNoneMatch, operation) {
       const result = database
         .prepare(
           `UPDATE profiles
-           SET name = ?, data_json = ?, revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+           SET name = ?, data_json = ?, documents_storage_version = 1,
+               revision = revision + 1, updated_at = CURRENT_TIMESTAMP
            WHERE id = ? AND revision = ?`,
         )
-        .run(validatedProfile.name, dataJson, validatedProfile.id, expectedRevision)
+        .run(validatedProfile.name, storedDataJson, validatedProfile.id, expectedRevision)
       if (result.changes !== 1) {
         throw requestError(409, 'PROFILE_CONFLICT', 'Otra pestana modifico este perfil. Recarga y vuelve a aplicar tus cambios.', {
           currentRevision: Number(existing.revision),
@@ -210,9 +231,14 @@ function upsertProfile(profile, ifMatch, ifNoneMatch, operation) {
       if (ifNoneMatch !== '*') {
         throw requestError(428, 'PROFILE_PRECONDITION_REQUIRED', 'La creacion del perfil requiere una precondicion explicita.')
       }
-      database.prepare('INSERT INTO profiles (id, name, data_json, revision) VALUES (?, ?, ?, 1)').run(validatedProfile.id, validatedProfile.name, dataJson)
+      database.prepare(`
+        INSERT INTO profiles (id, name, data_json, revision, documents_storage_version)
+        VALUES (?, ?, ?, 1, 1)
+      `).run(validatedProfile.id, validatedProfile.name, storedDataJson)
       revision = 1
     }
+
+    syncProfileDocumentPayloads(validatedProfile)
     if (operation === 'import_batch') {
       database.prepare(`
         INSERT INTO profile_import_undo (profile_id, batch_id, previous_data_json, previous_sha256, applied_revision)
@@ -223,11 +249,11 @@ function upsertProfile(profile, ifMatch, ifNoneMatch, operation) {
           previous_sha256 = excluded.previous_sha256,
           applied_revision = excluded.applied_revision,
           created_at = CURRENT_TIMESTAMP
-      `).run(validatedProfile.id, randomUUID(), existing?.data_json ?? null, existing?.data_json ? sha256(existing.data_json) : null, revision)
+      `).run(validatedProfile.id, randomUUID(), previousDataJson, previousDataJson ? sha256(previousDataJson) : null, revision)
     } else {
       database.prepare('DELETE FROM profile_import_undo WHERE profile_id = ?').run(validatedProfile.id)
     }
-    syncProfileDocuments(validatedProfile)
+    if (shouldSyncDocuments) syncProfileDocuments(validatedProfile)
     writeAudit('profile', validatedProfile.id, 'upsert', {
       name: validatedProfile.name,
       documentCount: validatedProfile.importedDocuments.length,
@@ -269,10 +295,12 @@ function rollbackLatestImport(profileId, ifMatch) {
     const revision = expectedRevision + 1
     const result = database.prepare(`
       UPDATE profiles
-      SET name = ?, data_json = ?, revision = ?, updated_at = CURRENT_TIMESTAMP
+      SET name = ?, data_json = ?, documents_storage_version = 1,
+          revision = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND revision = ?
-    `).run(restoredProfile.name, JSON.stringify(restoredProfile), revision, profileId, expectedRevision)
+    `).run(restoredProfile.name, profileDataJson(restoredProfile), revision, profileId, expectedRevision)
     if (result.changes !== 1) throw requestError(409, 'PROFILE_CONFLICT', 'El perfil cambio mientras se deshacia la importacion.')
+    syncProfileDocumentPayloads(restoredProfile)
     syncProfileDocuments(restoredProfile)
     database.prepare('DELETE FROM profile_import_undo WHERE profile_id = ?').run(profileId)
     writeAudit('profile', profileId, 'undo_import', { batchId: undo.batch_id, revision })

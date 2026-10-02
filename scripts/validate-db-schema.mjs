@@ -12,6 +12,9 @@ try {
     listProfileDocuments,
     listProfileReconciliation,
     listProfileTransactionAmounts,
+    profileDataJson,
+    rowToProfile,
+    syncProfileDocumentPayloads,
     syncProfileDocuments,
   } = await import('../server/db.mjs')
   const profile = {
@@ -49,12 +52,20 @@ try {
     profile.name,
     JSON.stringify(profile),
   )
+  assert.deepEqual(rowToProfile(database.prepare('SELECT * FROM profiles WHERE id = ?').get(profile.id)), profile)
+  database.prepare(`
+    UPDATE profiles
+    SET data_json = ?, documents_storage_version = 1
+    WHERE id = ?
+  `).run(profileDataJson(profile), profile.id)
+  syncProfileDocumentPayloads(profile)
+  assert.deepEqual(rowToProfile(database.prepare('SELECT * FROM profiles WHERE id = ?').get(profile.id)), profile)
   syncProfileDocuments(profile)
 
   assert.deepEqual(
     database.prepare('SELECT version FROM schema_migrations ORDER BY version').all()
       .map((row) => ({ version: Number(row.version) })),
-    [{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }],
+    [{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }],
   )
   assert.equal(database.prepare('SELECT revision FROM profiles WHERE id = ?').get(profile.id).revision, 1)
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM documents').get().count, 1)
@@ -70,7 +81,10 @@ try {
   assert.equal(listProfileReconciliation(profile.id).length, 2)
   assert.equal(listProfileTransactionAmounts(profile.id).length, 2)
   profile.importedDocuments[0].extracted.currency = 'MXN'
+  syncProfileDocumentPayloads(profile)
   syncProfileDocuments(profile)
+  assert.equal(database.prepare('SELECT revision FROM profile_document_payloads').get().revision, 2)
+  assert.deepEqual(rowToProfile(database.prepare('SELECT * FROM profiles WHERE id = ?').get(profile.id)), profile)
   assert.equal(database.prepare("SELECT status FROM reconciliation_matches WHERE target_transaction_id = 'tx-1'").get().status, 'matched')
   assert.equal(listProfileDocuments(profile.id)[0].pending_matches, 1)
   assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok')

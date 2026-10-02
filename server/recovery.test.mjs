@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { MAX_BACKUP_ENVELOPE_BYTES, createEncryptedBackup, restoreEncryptedBackup } from './recovery.mjs'
+import { hydrateProfileDocuments, serializeProfileWithoutDocuments } from './profile-document-storage.mjs'
 
 function syntheticDatabase(path, marker) {
   const database = new DatabaseSync(path)
@@ -71,4 +72,93 @@ test('encrypted backup restores a valid SQLite snapshot and rotates old copies',
     restoreEncryptedBackup({ inputPath: oversizedPath, outputPath: join(directory, 'oversized.sqlite'), secret }),
     /excede el limite permitido/,
   )
+})
+
+test('encrypted backup preserves incremental document payloads', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'finanzas-recovery-incremental-'))
+  const sourcePath = join(directory, 'source.sqlite')
+  const database = new DatabaseSync(sourcePath, { enableForeignKeyConstraints: true })
+  database.exec(`
+    CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) STRICT;
+    CREATE TABLE profiles (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      data_json TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      documents_storage_version INTEGER NOT NULL DEFAULT 0
+    ) STRICT;
+    CREATE TABLE profile_document_payloads (
+      profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      document_id TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (profile_id, position)
+    ) STRICT;
+    INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4), (5);
+  `)
+  const profile = {
+    id: 'synthetic-incremental',
+    name: 'Perfil incremental',
+    importedDocuments: [{ id: 'document-1', summary: 'SYNTHETIC_INCREMENTAL_MARKER' }],
+  }
+  database.prepare(`
+    INSERT INTO profiles (id, name, data_json, documents_storage_version)
+    VALUES (?, ?, ?, 1)
+  `).run(profile.id, profile.name, serializeProfileWithoutDocuments(profile))
+  database.prepare(`
+    INSERT INTO profile_document_payloads (profile_id, position, document_id, payload_json)
+    VALUES (?, 0, ?, ?)
+  `).run(profile.id, profile.importedDocuments[0].id, JSON.stringify(profile.importedDocuments[0]))
+
+  const secret = 'synthetic-incremental-secret-at-least-32-bytes'
+  const backup = await createEncryptedBackup({
+    database,
+    sourcePath,
+    outputDirectory: join(directory, 'backups'),
+    secret,
+  })
+  database.close()
+  const restoredPath = join(directory, 'restored.sqlite')
+  await restoreEncryptedBackup({ inputPath: backup.outputPath, outputPath: restoredPath, secret })
+  const restored = new DatabaseSync(restoredPath, { readOnly: true })
+  try {
+    assert.deepEqual(
+      hydrateProfileDocuments(restored, restored.prepare('SELECT * FROM profiles WHERE id = ?').get(profile.id)),
+      profile,
+    )
+  } finally {
+    restored.close()
+  }
+
+  const invalidPath = join(directory, 'invalid-v5.sqlite')
+  const invalid = new DatabaseSync(invalidPath)
+  invalid.exec(`
+    CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) STRICT;
+    CREATE TABLE profiles (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      data_json TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      documents_storage_version INTEGER NOT NULL DEFAULT 0
+    ) STRICT;
+    INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4), (5);
+  `)
+  await assert.rejects(
+    createEncryptedBackup({
+      database: invalid,
+      sourcePath: invalidPath,
+      outputDirectory: join(directory, 'invalid-backups'),
+      secret,
+    }),
+    /payloads documentales/,
+  )
+  invalid.close()
 })

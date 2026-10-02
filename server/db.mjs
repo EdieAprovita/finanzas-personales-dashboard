@@ -4,6 +4,11 @@ import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { knowledgeEntries, knowledgeSources } from './knowledge-seed.mjs'
 import { migrateProfile } from './profile-schema.mjs'
+import {
+  hydrateProfileDocuments,
+  serializeProfileWithoutDocuments,
+  syncProfileDocumentPayloads as syncDocumentPayloads,
+} from './profile-document-storage.mjs'
 
 export const dbPath = resolve(process.cwd(), process.env.FINANZAS_DB_PATH ?? 'data/finanzas-os.sqlite')
 const usesDefaultDbPath = !process.env.FINANZAS_DB_PATH
@@ -197,6 +202,26 @@ const MIGRATIONS = [
           previous_sha256 TEXT,
           applied_revision INTEGER NOT NULL,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) STRICT;
+      `)
+    },
+  },
+  {
+    version: 5,
+    apply() {
+      database.exec(`
+        ALTER TABLE profiles
+          ADD COLUMN documents_storage_version INTEGER NOT NULL DEFAULT 0
+          CHECK (documents_storage_version IN (0, 1));
+
+        CREATE TABLE profile_document_payloads (
+          profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          position INTEGER NOT NULL CHECK (position >= 0),
+          document_id TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          revision INTEGER NOT NULL DEFAULT 1,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (profile_id, position)
         ) STRICT;
       `)
     },
@@ -757,8 +782,16 @@ export function writeAudit(entityType, entityId, action, change) {
     .run(randomUUID(), entityType, entityId, action, JSON.stringify(change))
 }
 
+export function profileDataJson(profile) {
+  return serializeProfileWithoutDocuments(profile)
+}
+
+export function syncProfileDocumentPayloads(profile) {
+  return syncDocumentPayloads(database, profile)
+}
+
 export function rowToProfile(row) {
-  return JSON.parse(row.data_json)
+  return hydrateProfileDocuments(database, row)
 }
 
 export function rowToKnowledge(row) {

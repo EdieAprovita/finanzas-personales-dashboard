@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, 
 import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { backup, DatabaseSync } from 'node:sqlite'
+import { hydrateProfileDocuments } from './profile-document-storage.mjs'
 
 const format = 'finanzas-os-sqlite-backup'
 const version = 1
@@ -82,6 +83,17 @@ function validateDatabase(path) {
     if (!migrations.includes(3)) throw new Error('El backup no contiene el esquema esperado.')
     const profileColumns = database.prepare('PRAGMA table_info(profiles)').all().map((row) => row.name)
     if (!profileColumns.includes('data_json') || !profileColumns.includes('revision')) throw new Error('La tabla de perfiles no tiene el esquema esperado.')
+    if (migrations.includes(5)) {
+      if (!profileColumns.includes('documents_storage_version')) {
+        throw new Error('La tabla de perfiles no contiene la version de almacenamiento documental.')
+      }
+      const payloadColumns = database.prepare('PRAGMA table_info(profile_document_payloads)').all().map((row) => row.name)
+      const requiredPayloadColumns = ['profile_id', 'position', 'document_id', 'payload_json', 'revision']
+      if (!requiredPayloadColumns.every((column) => payloadColumns.includes(column))) {
+        throw new Error('La tabla de payloads documentales no tiene el esquema esperado.')
+      }
+      for (const row of database.prepare('SELECT * FROM profiles').all()) hydrateProfileDocuments(database, row)
+    }
   } finally {
     database.close()
   }
