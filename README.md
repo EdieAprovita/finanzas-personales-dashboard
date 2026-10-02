@@ -23,6 +23,25 @@ npm run build
 npm run lint
 ```
 
+### Backup cifrado y restauración
+
+La herramienta local crea snapshots SQLite consistentes, los cifra con AES-256-GCM y conserva los siete más recientes. La clave se lee desde un archivo privado fuera del repositorio; no se acepta por argumento ni se guarda en la base.
+
+```bash
+umask 077
+openssl rand -hex 32 > "$HOME/.finanzas-os-backup-key"
+npm run backup:db -- --key-file "$HOME/.finanzas-os-backup-key"
+```
+
+La restauración siempre escribe una base nueva y valida autenticación, checksum, integridad SQLite, llaves foráneas y esquema antes de terminar:
+
+```bash
+npm run restore:db -- --input data/backups/finanzas-os-AAAA.backup.json --key-file "$HOME/.finanzas-os-backup-key"
+FINANZAS_DB_PATH=data/finanzas-os-restored.sqlite npm run api
+```
+
+Guarda otra copia del backup y de la clave en ubicaciones separadas. Perder la clave hace imposible recuperar la copia cifrada. La base activa continúa sin cifrado propio.
+
 `npm run dev` inicia Vite y la API local en paralelo. Vite queda disponible en
 `http://localhost:5173/` y la API en `http://127.0.0.1:4147/`; al detener el
 comando se detienen ambos procesos.

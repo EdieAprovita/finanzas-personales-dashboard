@@ -264,6 +264,26 @@ describe('recalculateLatestSnapshot', () => {
     expect(recalculated.monthlySnapshots).toHaveLength(1)
   })
 
+  it('allows a lower observed income while preserving the previous month', () => {
+    const original = profile({
+      transactions: [
+        { id: 'june-income', date: '2026-06-01', amount: 10000, merchant: 'Nomina junio', category: 'Ingreso', accountId: 'cash', type: 'income' },
+        { id: 'july-income', date: '2026-07-01', amount: 7000, merchant: 'Nomina julio', category: 'Ingreso', accountId: 'cash', type: 'income' },
+      ],
+    })
+
+    const recalculated = recalculateLatestSnapshot(original, '2026-07-09')
+
+    expect(recalculated.grossMonthlyIncome).toBe(7000)
+    expect(recalculated.netMonthlyIncome).toBe(7000)
+    expect(recalculated.monthlySnapshots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ month: '2026-06', income: 10000 }),
+        expect.objectContaining({ month: '2026-07', income: 7000 }),
+      ]),
+    )
+  })
+
   it('persists dated balances only from processed statements when regenerating transaction snapshots', () => {
     const original = profile({
       transactions: [

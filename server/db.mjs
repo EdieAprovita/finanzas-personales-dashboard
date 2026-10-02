@@ -180,6 +180,27 @@ const MIGRATIONS = [
       `)
     },
   },
+  {
+    version: 3,
+    apply() {
+      database.exec('ALTER TABLE profiles ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;')
+    },
+  },
+  {
+    version: 4,
+    apply() {
+      database.exec(`
+        CREATE TABLE profile_import_undo (
+          profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+          batch_id TEXT NOT NULL,
+          previous_data_json TEXT,
+          previous_sha256 TEXT,
+          applied_revision INTEGER NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) STRICT;
+      `)
+    },
+  },
 ]
 
 function applyMigrations() {

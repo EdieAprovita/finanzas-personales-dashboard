@@ -39,7 +39,7 @@ for (const lanMode of ['0', '1']) {
       assert.equal((await health.json()).authRequired, true)
       const origin = 'http://localhost:5173'
       for (const [method, path] of [
-        ['GET', '/api/profiles'], ['PUT', '/api/profiles/synthetic'], ['DELETE', '/api/profiles'],
+        ['GET', '/api/profiles'], ['PUT', '/api/profiles/synthetic'], ['POST', '/api/profiles/synthetic/import-undo'], ['DELETE', '/api/profiles'],
         ['DELETE', '/api/profiles/synthetic'], ['GET', '/api/profiles/synthetic/documents'],
         ['GET', '/api/profiles/synthetic/reconciliation'], ['GET', '/api/profiles/synthetic/transaction-amounts'],
         ['GET', '/api/knowledge'], ['POST', '/api/knowledge/explain'],

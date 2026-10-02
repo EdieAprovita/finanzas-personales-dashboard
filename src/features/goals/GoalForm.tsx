@@ -29,7 +29,7 @@ export function GoalForm({
 
   return (
     <div className={`goal-form ${compact ? 'compact' : ''}`}>
-      <div className="goal-type-grid" role="list" aria-label="Tipo de meta">
+      <div className="goal-type-grid" role="group" aria-label="Tipo de meta">
         {typeOptions.map((type) => {
           const Icon = goalIcons[type]
           return (
@@ -100,7 +100,7 @@ export function GoalForm({
           <small>Estimado a {estimate.months} mes(es) para llegar a la fecha.</small>
         </div>
       )}
-      {error && <p className="form-error">{error}</p>}
+      {error && <p className="form-error" role="alert">{error}</p>}
     </div>
   )
 }

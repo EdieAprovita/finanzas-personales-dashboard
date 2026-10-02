@@ -5,6 +5,25 @@ const API_BASE = import.meta.env.VITE_FINANZAS_API_URL ?? ''
 const ACCESS_TOKEN_KEY = 'finanzas-api-access-token'
 
 export class ApiAuthenticationError extends Error {}
+export class ProfileConflictError extends Error {
+  readonly currentRevision?: number
+
+  constructor(message: string, currentRevision?: number) {
+    super(message)
+    this.name = 'ProfileConflictError'
+    this.currentRevision = currentRevision
+  }
+}
+
+export class ProfileTooLargeError extends Error {
+  readonly maxBytes?: number
+
+  constructor(message: string, maxBytes?: number) {
+    super(message)
+    this.name = 'ProfileTooLargeError'
+    this.maxBytes = maxBytes
+  }
+}
 
 export function setApiAccessToken(token: string): void {
   if (token.trim()) window.sessionStorage.setItem(ACCESS_TOKEN_KEY, token.trim())
@@ -48,33 +67,56 @@ async function request<T>(path: string, init?: RequestInit, schema?: z.ZodType<T
       setApiAccessToken('')
       throw new ApiAuthenticationError('Clave de acceso ausente o incorrecta.')
     }
-    const body = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new Error(body?.error ?? `API local respondio ${response.status}`)
+    const body = (await response.json().catch(() => null)) as {
+      error?: string
+      code?: string
+      currentRevision?: number
+      maxBytes?: number
+    } | null
+    const message = body?.error ?? `API local respondio ${response.status}`
+    if (response.status === 409 && body?.code === 'PROFILE_CONFLICT') {
+      throw new ProfileConflictError(message, body.currentRevision)
+    }
+    if (response.status === 413) throw new ProfileTooLargeError(message, body?.maxBytes)
+    throw new Error(message)
   }
   const body = await response.json()
   return schema ? schema.parse(body) : (body as T)
 }
 
 export async function getApiHealth() {
-  return request<{ ok: boolean; dbFile: string; mode: string; writable: boolean }>('/api/health')
+  return request<{ ok: boolean; dbFile: string; mode: string; writable: boolean; maxProfileBytes: number }>('/api/health')
 }
 
 export async function getProfiles() {
-  const body = await request<{ profiles: FinancialProfile[] }>('/api/profiles')
-  return body.profiles
+  return request<{
+    profiles: FinancialProfile[]
+    revisions: Record<string, number>
+    importUndos: Record<string, { batchId: string; revision: number; createdAt: string }>
+  }>('/api/profiles')
 }
 
-export async function saveProfile(profile: FinancialProfile) {
-  const body = await request<{ profile: FinancialProfile }>(`/api/profiles/${encodeURIComponent(profile.id)}`, {
+export async function saveProfile(profile: FinancialProfile, revision?: number, operation?: 'import_batch') {
+  return request<{ profile: FinancialProfile; revision: number }>(`/api/profiles/${encodeURIComponent(profile.id)}`, {
     method: 'PUT',
     body: JSON.stringify(profile),
+    headers: revision
+      ? { 'if-match': `"profile-${revision}"`, ...(operation ? { 'x-finanzas-operation': operation } : {}) }
+      : { 'if-none-match': '*', ...(operation ? { 'x-finanzas-operation': operation } : {}) },
   })
-  return body.profile
 }
 
-export async function deleteProfile(id: string) {
+export async function undoLatestImport(id: string, revision: number) {
+  return request<{ deleted: boolean; profile?: FinancialProfile; revision?: number }>(
+    `/api/profiles/${encodeURIComponent(id)}/import-undo`,
+    { method: 'POST', headers: { 'if-match': `"profile-${revision}"` } },
+  )
+}
+
+export async function deleteProfile(id: string, revision: number) {
   return request<{ ok: boolean }>(`/api/profiles/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+    headers: { 'if-match': `"profile-${revision}"` },
   })
 }
 

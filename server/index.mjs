@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomUUID, randomBytes, timingSafeEqual } from 'node:crypto'
 import { basename } from 'node:path'
 import {
   database,
@@ -35,6 +35,10 @@ const configuredOrigins = new Set(
 )
 
 const maxJsonBytes = 2 * 1024 * 1024
+const maxProfileJsonBytes = Number(process.env.FINANZAS_MAX_PROFILE_BYTES ?? 16 * 1024 * 1024)
+if (!Number.isSafeInteger(maxProfileJsonBytes) || maxProfileJsonBytes < maxJsonBytes || maxProfileJsonBytes > 64 * 1024 * 1024) {
+  throw new Error('FINANZAS_MAX_PROFILE_BYTES debe ser un entero entre 2 MiB y 64 MiB.')
+}
 
 function isLocalDevelopmentHost(hostname) {
   const normalized = hostname.toLowerCase()
@@ -62,11 +66,13 @@ function isAllowedOrigin(origin) {
   }
 }
 
-function send(res, status, body, origin) {
+function send(res, status, body, origin, extraHeaders = {}) {
   const headers = {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-methods': 'GET,POST,PUT,DELETE,OPTIONS',
-    'access-control-allow-headers': 'content-type,authorization',
+    'access-control-allow-headers': 'content-type,authorization,if-match,if-none-match,x-finanzas-operation',
+    'access-control-expose-headers': 'etag',
+    ...extraHeaders,
   }
   if (origin && isAllowedOrigin(origin)) {
     headers['access-control-allow-origin'] = origin
@@ -75,14 +81,15 @@ function send(res, status, body, origin) {
   res.end(JSON.stringify(body))
 }
 
-async function readJson(req) {
+async function readJson(req, limit = maxJsonBytes) {
   const chunks = []
   let size = 0
   for await (const chunk of req) {
     size += chunk.length
-    if (size > maxJsonBytes) {
+    if (size > limit) {
       const error = new Error('payload_too_large')
       error.code = 'PAYLOAD_TOO_LARGE'
+      error.maxBytes = limit
       throw error
     }
     chunks.push(chunk)
@@ -114,27 +121,158 @@ function listProfiles() {
     })
 }
 
-function upsertProfile(profile) {
+function listProfileRevisions() {
+  return Object.fromEntries(database.prepare('SELECT id, revision FROM profiles').all().map((row) => [row.id, Number(row.revision)]))
+}
+
+function listProfileImportUndos() {
+  return Object.fromEntries(
+    database.prepare('SELECT profile_id, batch_id, applied_revision, created_at FROM profile_import_undo').all()
+      .map((row) => [row.profile_id, { batchId: row.batch_id, revision: Number(row.applied_revision), createdAt: row.created_at }]),
+  )
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function requestError(status, code, message, details = {}) {
+  const error = new Error(message)
+  error.status = status
+  error.code = code
+  Object.assign(error, details)
+  return error
+}
+
+function parseProfileRevision(value) {
+  if (typeof value !== 'string') return undefined
+  const match = value.match(/^"profile-(\d+)"$/)
+  if (!match) return undefined
+  const revision = Number(match[1])
+  return Number.isSafeInteger(revision) && revision > 0 ? revision : undefined
+}
+
+function profileEtag(revision) {
+  return `"profile-${revision}"`
+}
+
+function upsertProfile(profile, ifMatch, ifNoneMatch, operation) {
   const validatedProfile = financialProfileSchema.parse(migrateProfile(profile))
-  database.exec('BEGIN')
+  const dataJson = JSON.stringify(validatedProfile)
+  if (Buffer.byteLength(dataJson) > maxProfileJsonBytes) {
+    throw requestError(413, 'PROFILE_TOO_LARGE', 'El perfil excede el limite de persistencia local.', { maxBytes: maxProfileJsonBytes })
+  }
+
+  database.exec('BEGIN IMMEDIATE')
   try {
-    database
-      .prepare(
-        `INSERT INTO profiles (id, name, data_json)
-         VALUES (?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           name = excluded.name,
-           data_json = excluded.data_json,
-           updated_at = CURRENT_TIMESTAMP`,
-      )
-      .run(validatedProfile.id, validatedProfile.name, JSON.stringify(validatedProfile))
+    const existing = database.prepare('SELECT revision, data_json FROM profiles WHERE id = ?').get(validatedProfile.id)
+    let revision
+
+    if (existing) {
+      if (ifNoneMatch === '*') {
+        throw requestError(409, 'PROFILE_CONFLICT', 'Ese perfil ya existe. Recarga antes de continuar.', {
+          currentRevision: Number(existing.revision),
+        })
+      }
+      const expectedRevision = parseProfileRevision(ifMatch)
+      if (!expectedRevision) {
+        throw requestError(428, 'PROFILE_PRECONDITION_REQUIRED', 'Recarga el perfil antes de guardar cambios.', {
+          currentRevision: Number(existing.revision),
+        })
+      }
+      if (expectedRevision !== Number(existing.revision)) {
+        throw requestError(409, 'PROFILE_CONFLICT', 'Otra pestana modifico este perfil. Recarga y vuelve a aplicar tus cambios.', {
+          currentRevision: Number(existing.revision),
+        })
+      }
+      const result = database
+        .prepare(
+          `UPDATE profiles
+           SET name = ?, data_json = ?, revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND revision = ?`,
+        )
+        .run(validatedProfile.name, dataJson, validatedProfile.id, expectedRevision)
+      if (result.changes !== 1) {
+        throw requestError(409, 'PROFILE_CONFLICT', 'Otra pestana modifico este perfil. Recarga y vuelve a aplicar tus cambios.', {
+          currentRevision: Number(existing.revision),
+        })
+      }
+      revision = expectedRevision + 1
+    } else {
+      if (typeof ifMatch === 'string') {
+        throw requestError(409, 'PROFILE_CONFLICT', 'El perfil ya no existe. Recarga antes de volver a guardarlo.')
+      }
+      if (ifNoneMatch !== '*') {
+        throw requestError(428, 'PROFILE_PRECONDITION_REQUIRED', 'La creacion del perfil requiere una precondicion explicita.')
+      }
+      database.prepare('INSERT INTO profiles (id, name, data_json, revision) VALUES (?, ?, ?, 1)').run(validatedProfile.id, validatedProfile.name, dataJson)
+      revision = 1
+    }
+    if (operation === 'import_batch') {
+      database.prepare(`
+        INSERT INTO profile_import_undo (profile_id, batch_id, previous_data_json, previous_sha256, applied_revision)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(profile_id) DO UPDATE SET
+          batch_id = excluded.batch_id,
+          previous_data_json = excluded.previous_data_json,
+          previous_sha256 = excluded.previous_sha256,
+          applied_revision = excluded.applied_revision,
+          created_at = CURRENT_TIMESTAMP
+      `).run(validatedProfile.id, randomUUID(), existing?.data_json ?? null, existing?.data_json ? sha256(existing.data_json) : null, revision)
+    } else {
+      database.prepare('DELETE FROM profile_import_undo WHERE profile_id = ?').run(validatedProfile.id)
+    }
     syncProfileDocuments(validatedProfile)
     writeAudit('profile', validatedProfile.id, 'upsert', {
       name: validatedProfile.name,
       documentCount: validatedProfile.importedDocuments.length,
+      revision,
+      operation: operation ?? 'profile_write',
     })
     database.exec('COMMIT')
-    return validatedProfile
+    return { profile: validatedProfile, revision }
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+}
+
+function rollbackLatestImport(profileId, ifMatch) {
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    const current = database.prepare('SELECT revision FROM profiles WHERE id = ?').get(profileId)
+    if (!current) throw requestError(404, 'PROFILE_NOT_FOUND', 'Perfil no encontrado.')
+    const expectedRevision = parseProfileRevision(ifMatch)
+    if (!expectedRevision) throw requestError(428, 'PROFILE_PRECONDITION_REQUIRED', 'Recarga el perfil antes de deshacer la importacion.')
+    const undo = database.prepare('SELECT * FROM profile_import_undo WHERE profile_id = ?').get(profileId)
+    if (!undo) throw requestError(409, 'IMPORT_UNDO_UNAVAILABLE', 'Ya no hay una importacion reciente que se pueda deshacer.')
+    if (expectedRevision !== Number(current.revision) || expectedRevision !== Number(undo.applied_revision)) {
+      throw requestError(409, 'PROFILE_CONFLICT', 'El perfil cambio despues de la importacion. Recarga antes de continuar.', {
+        currentRevision: Number(current.revision),
+      })
+    }
+
+    if (undo.previous_data_json === null) {
+      database.prepare('DELETE FROM profiles WHERE id = ? AND revision = ?').run(profileId, expectedRevision)
+      writeAudit('profile', profileId, 'undo_import_delete', { batchId: undo.batch_id })
+      database.exec('COMMIT')
+      return { deleted: true }
+    }
+
+    if (sha256(undo.previous_data_json) !== undo.previous_sha256) throw new Error('El snapshot de deshacer no supera la verificacion de integridad.')
+    const restoredProfile = financialProfileSchema.parse(migrateProfile(JSON.parse(undo.previous_data_json)))
+    const revision = expectedRevision + 1
+    const result = database.prepare(`
+      UPDATE profiles
+      SET name = ?, data_json = ?, revision = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND revision = ?
+    `).run(restoredProfile.name, JSON.stringify(restoredProfile), revision, profileId, expectedRevision)
+    if (result.changes !== 1) throw requestError(409, 'PROFILE_CONFLICT', 'El perfil cambio mientras se deshacia la importacion.')
+    syncProfileDocuments(restoredProfile)
+    database.prepare('DELETE FROM profile_import_undo WHERE profile_id = ?').run(profileId)
+    writeAudit('profile', profileId, 'undo_import', { batchId: undo.batch_id, revision })
+    database.exec('COMMIT')
+    return { deleted: false, profile: restoredProfile, revision }
   } catch (error) {
     database.exec('ROLLBACK')
     throw error
@@ -254,13 +392,13 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') {
-      return send(res, 200, { ok: true, dbFile: basename(dbPath), mode: lanMode ? 'sqlite-local-lan' : 'sqlite-local-file', writable: true, authRequired: true }, origin)
+      return send(res, 200, { ok: true, dbFile: basename(dbPath), mode: lanMode ? 'sqlite-local-lan' : 'sqlite-local-file', writable: true, authRequired: true, maxProfileBytes: maxProfileJsonBytes }, origin)
     }
 
   if (!isAuthenticated(req)) return send(res, 401, { error: 'Introduce la clave de acceso de la API para abrir tus datos.' }, origin)
 
     if (req.method === 'GET' && url.pathname === '/api/profiles') {
-    return send(res, 200, { profiles: listProfiles() }, origin)
+      return send(res, 200, { profiles: listProfiles(), revisions: listProfileRevisions(), importUndos: listProfileImportUndos() }, origin)
   }
 
   const profileDocumentsMatch = url.pathname.match(/^\/api\/profiles\/([^/]+)\/documents$/)
@@ -289,11 +427,19 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'PUT' && url.pathname.startsWith('/api/profiles/')) {
       if (!req.headers['content-type']?.startsWith('application/json')) return send(res, 415, { error: 'Content-Type debe ser application/json.' }, origin)
-      const profile = await readJson(req)
+      const profile = await readJson(req, maxProfileJsonBytes)
       const profileId = decodeURIComponent(url.pathname.split('/').at(-1) ?? '')
       if (!profile?.id || !profile?.name || profile.id !== profileId) return send(res, 400, { error: 'Perfil invalido.' }, origin)
-      const savedProfile = upsertProfile(profile)
-      return send(res, 200, { profile: savedProfile }, origin)
+      const operation = req.headers['x-finanzas-operation'] === 'import_batch' ? 'import_batch' : undefined
+      const saved = upsertProfile(profile, req.headers['if-match'], req.headers['if-none-match'], operation)
+      return send(res, 200, saved, origin, { etag: profileEtag(saved.revision) })
+    }
+
+    const importUndoMatch = url.pathname.match(/^\/api\/profiles\/([^/]+)\/import-undo$/)
+    if (req.method === 'POST' && importUndoMatch) {
+      const profileId = decodeURIComponent(importUndoMatch[1])
+      const result = rollbackLatestImport(profileId, req.headers['if-match'])
+      return send(res, 200, result, origin, result.revision ? { etag: profileEtag(result.revision) } : {})
     }
 
     if (req.method === 'DELETE' && url.pathname === '/api/profiles') {
@@ -303,8 +449,15 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'DELETE' && url.pathname.startsWith('/api/profiles/')) {
       const id = decodeURIComponent(url.pathname.split('/').at(-1) ?? '')
-      const result = database.prepare('DELETE FROM profiles WHERE id = ?').run(id)
-      if (result.changes === 0) return send(res, 404, { error: 'Perfil no encontrado.' }, origin)
+      const existing = database.prepare('SELECT revision FROM profiles WHERE id = ?').get(id)
+      if (!existing) return send(res, 404, { error: 'Perfil no encontrado.' }, origin)
+      const expectedRevision = parseProfileRevision(req.headers['if-match'])
+      if (!expectedRevision) return send(res, 428, { error: 'Recarga el perfil antes de eliminarlo.', code: 'PROFILE_PRECONDITION_REQUIRED' }, origin)
+      if (expectedRevision !== Number(existing.revision)) {
+        return send(res, 409, { error: 'Otra pestana modifico este perfil. Recarga antes de eliminarlo.', code: 'PROFILE_CONFLICT', currentRevision: Number(existing.revision) }, origin)
+      }
+      const result = database.prepare('DELETE FROM profiles WHERE id = ? AND revision = ?').run(id, expectedRevision)
+      if (result.changes === 0) return send(res, 409, { error: 'Otra pestana modifico este perfil. Recarga antes de eliminarlo.', code: 'PROFILE_CONFLICT' }, origin)
       writeAudit('profile', id, 'delete', {})
       return send(res, 200, { ok: true }, origin)
     }
@@ -328,7 +481,8 @@ const server = createServer(async (req, res) => {
 
     return send(res, 404, { error: 'Ruta no encontrada.' }, origin)
   } catch (error) {
-    if (error?.code === 'PAYLOAD_TOO_LARGE') return send(res, 413, { error: 'El cuerpo excede el limite permitido.' }, origin)
+    if (error?.code === 'PAYLOAD_TOO_LARGE') return send(res, 413, { error: 'El cuerpo excede el limite permitido.', code: error.code, maxBytes: error.maxBytes }, origin)
+    if (error?.status) return send(res, error.status, { error: error.message, code: error.code, currentRevision: error.currentRevision, maxBytes: error.maxBytes }, origin)
     if (error instanceof SyntaxError) return send(res, 400, { error: 'JSON invalido.' }, origin)
     if (error?.name === 'ZodError') {
       const errorMessage = url.pathname === '/api/knowledge/explain' ? 'Solicitud de explicacion invalida.' : url.pathname.startsWith('/api/profiles') ? 'Perfil invalido.' : 'Solicitud invalida.'

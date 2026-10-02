@@ -184,8 +184,8 @@ export function recalculateLatestSnapshot(profile: FinancialProfile, asOfDate: s
   const snapshots = profile.monthlySnapshots.filter((row) => row.month !== month)
   return {
     ...profile,
-    grossMonthlyIncome: Math.max(profile.grossMonthlyIncome, income),
-    netMonthlyIncome: Math.max(profile.netMonthlyIncome, income),
+    grossMonthlyIncome: income > 0 ? income : profile.grossMonthlyIncome,
+    netMonthlyIncome: income > 0 ? income : profile.netMonthlyIncome,
     monthlySnapshots: enrichSnapshotsWithDocumentPositions(profile, [...snapshots, nextSnapshot].sort((a, b) => a.month.localeCompare(b.month))),
   }
 }

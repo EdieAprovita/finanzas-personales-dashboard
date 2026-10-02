@@ -54,8 +54,9 @@ try {
   assert.deepEqual(
     database.prepare('SELECT version FROM schema_migrations ORDER BY version').all()
       .map((row) => ({ version: Number(row.version) })),
-    [{ version: 1 }, { version: 2 }],
+    [{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }],
   )
+  assert.equal(database.prepare('SELECT revision FROM profiles WHERE id = ?').get(profile.id).revision, 1)
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM documents').get().count, 1)
   assert.equal(database.prepare('SELECT amount_minor FROM document_rows').get().amount_minor, 12345)
   assert.equal(database.prepare('SELECT currency FROM document_rows').get().currency, 'USD')

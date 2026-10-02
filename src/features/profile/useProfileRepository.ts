@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { latestReportingPeriod, migrateFinancialProfile } from '../../domain/profile'
 import type { FinancialProfile } from '../../domain/types'
-import { ApiAuthenticationError, deleteAllProfiles, deleteProfile, getApiHealth, getProfiles, saveProfile } from '../../lib/api'
+import { ApiAuthenticationError, deleteAllProfiles, deleteProfile, getApiHealth, getProfiles, saveProfile, undoLatestImport } from '../../lib/api'
 
 export type ProfileApiStatus = 'checking' | 'sqlite' | 'blocked' | 'authentication_required'
 
 export interface ProfileRepository {
   apiStatus: ProfileApiStatus
   profiles: FinancialProfile[]
+  undoableImportProfileIds: Set<string>
   activeProfileId: string
   currentProfile: FinancialProfile | undefined
   reportingPeriod: string
@@ -16,7 +17,8 @@ export interface ProfileRepository {
   loadProfiles: () => Promise<void>
   activateProfile: (profile: FinancialProfile) => void
   selectProfile: (id: string) => FinancialProfile | undefined
-  persistProfile: (profile: FinancialProfile) => Promise<void>
+  persistProfile: (profile: FinancialProfile, options?: { operation?: 'import_batch' }) => Promise<void>
+  undoLatestImportForProfile: (id: string) => Promise<boolean>
   deleteStoredProfile: (id: string) => Promise<FinancialProfile[]>
   deleteAllStoredProfiles: () => Promise<void>
   replaceProfiles: (nextProfiles: FinancialProfile[]) => void
@@ -28,6 +30,8 @@ function storageUnavailableError(): Error {
 
 export function useProfileRepository(asOfDate: string): ProfileRepository {
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const revisionsRef = useRef(new Map<string, number>())
+  const [undoableImportProfileIds, setUndoableImportProfileIds] = useState(new Set<string>())
   const [activeProfileId, setActiveProfileId] = useState('')
   const [profiles, setProfiles] = useState<FinancialProfile[]>([])
   const [apiStatus, setApiStatus] = useState<ProfileApiStatus>('checking')
@@ -63,9 +67,12 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
     try {
       await getApiHealth()
       setApiStatus('sqlite')
-      const apiProfiles = await getProfiles()
+      const { profiles: apiProfiles, revisions, importUndos } = await getProfiles()
+      revisionsRef.current = new Map(Object.entries(revisions))
+      setUndoableImportProfileIds(new Set(Object.keys(importUndos)))
 
       if (apiProfiles.length === 0) {
+        revisionsRef.current.clear()
         setProfiles([])
         setActiveProfileId('')
         return
@@ -85,12 +92,20 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
   }, [asOfDate])
 
   const persistProfile = useCallback(
-    async (profile: FinancialProfile): Promise<void> => {
+    async (profile: FinancialProfile, options?: { operation?: 'import_batch' }): Promise<void> => {
       const saveOperation = saveQueueRef.current.then(async () => {
         if (apiStatus !== 'sqlite') throw storageUnavailableError()
 
         try {
-          await saveProfile(profile)
+          const saved = await saveProfile(profile, revisionsRef.current.get(profile.id), options?.operation)
+          revisionsRef.current.set(profile.id, saved.revision)
+          profile = migrateFinancialProfile(saved.profile)
+          setUndoableImportProfileIds((current) => {
+            const next = new Set(current)
+            if (options?.operation === 'import_batch') next.add(profile.id)
+            else next.delete(profile.id)
+            return next
+          })
         } catch (error) {
           if (error instanceof ApiAuthenticationError) setApiStatus('authentication_required')
           throw error
@@ -109,16 +124,57 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
     [apiStatus],
   )
 
+  const undoLatestImportForProfile = useCallback(async (id: string): Promise<boolean> => {
+    if (apiStatus !== 'sqlite') throw storageUnavailableError()
+    const revision = revisionsRef.current.get(id)
+    if (!revision) throw new Error('Recarga el perfil antes de deshacer la importacion.')
+    let result: Awaited<ReturnType<typeof undoLatestImport>>
+    try {
+      result = await undoLatestImport(id, revision)
+    } catch (error) {
+      if (error instanceof ApiAuthenticationError) setApiStatus('authentication_required')
+      throw error
+    }
+    setUndoableImportProfileIds((current) => {
+      const next = new Set(current)
+      next.delete(id)
+      return next
+    })
+    if (result.deleted) {
+      revisionsRef.current.delete(id)
+      const nextProfiles = profiles.filter((profile) => profile.id !== id)
+      setProfiles(nextProfiles)
+      const nextProfile = nextProfiles[0]
+      if (nextProfile) activateProfile(nextProfile)
+      else setActiveProfileId('')
+      return true
+    }
+    if (!result.profile || !result.revision) throw new Error('La API no devolvio el perfil restaurado.')
+    const restored = migrateFinancialProfile(result.profile)
+    revisionsRef.current.set(id, result.revision)
+    setProfiles((current) => current.map((profile) => profile.id === id ? restored : profile))
+    activateProfile(restored)
+    return false
+  }, [activateProfile, apiStatus, profiles])
+
   const deleteStoredProfile = useCallback(
     async (id: string): Promise<FinancialProfile[]> => {
       if (apiStatus !== 'sqlite') throw storageUnavailableError()
 
       try {
-      await deleteProfile(id)
-    } catch (error) {
-      if (error instanceof ApiAuthenticationError) setApiStatus('authentication_required')
-      throw error
-    }
+        const revision = revisionsRef.current.get(id)
+        if (!revision) throw new Error('Recarga el perfil antes de eliminarlo.')
+        await deleteProfile(id, revision)
+        revisionsRef.current.delete(id)
+      } catch (error) {
+        if (error instanceof ApiAuthenticationError) setApiStatus('authentication_required')
+        throw error
+      }
+      setUndoableImportProfileIds((current) => {
+        const next = new Set(current)
+        next.delete(id)
+        return next
+      })
       const nextProfiles = profiles.filter((profile) => profile.id !== id)
       setProfiles(nextProfiles)
 
@@ -144,6 +200,8 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
       throw error
     }
     setProfiles([])
+    revisionsRef.current.clear()
+    setUndoableImportProfileIds(new Set())
     setActiveProfileId('')
   }, [apiStatus])
 
@@ -173,6 +231,7 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
   return {
     apiStatus,
     profiles,
+    undoableImportProfileIds,
     activeProfileId,
     currentProfile,
     reportingPeriod,
@@ -182,6 +241,7 @@ export function useProfileRepository(asOfDate: string): ProfileRepository {
     activateProfile,
     selectProfile,
     persistProfile,
+    undoLatestImportForProfile,
     deleteStoredProfile,
     deleteAllStoredProfiles,
     replaceProfiles,

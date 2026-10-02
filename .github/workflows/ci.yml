@@ -73,6 +73,9 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      - name: API tests
+        run: npm run test:api
+
       - name: Validate knowledge seed
         run: npm run test:knowledge
 

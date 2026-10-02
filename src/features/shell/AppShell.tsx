@@ -9,7 +9,7 @@ import {
   Target,
   Upload,
 } from 'lucide-react'
-import { lazy, Suspense } from 'react'
+import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from 'react'
 import type { FinancialMetrics } from '../../domain/finance'
 import type { FinancialProfile } from '../../domain/types'
 import type { ReviewedDocumentFields } from '../../lib/importers'
@@ -24,6 +24,35 @@ const Imports = lazy(() => import('../imports/Imports').then(({ Imports: Compone
 const KnowledgeMatrix = lazy(() => import('../knowledge/KnowledgeMatrix').then(({ KnowledgeMatrix: Component }) => ({ default: Component })))
 const Planning = lazy(() => import('../planning/Planning').then(({ Planning: Component }) => ({ default: Component })))
 const PrivacyPanel = lazy(() => import('../privacy/PrivacyPanel').then(({ PrivacyPanel: Component }) => ({ default: Component })))
+
+class SectionErrorBoundary extends Component<
+  { children: ReactNode; onBackToProfiles: () => void },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('No se pudo renderizar el área activa.', error, info)
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children
+    return (
+      <section className="panel wide" role="alert">
+        <h2>No se pudo cargar esta área</h2>
+        <p>Recarga la aplicación o vuelve a tus perfiles para continuar.</p>
+        <div className="empty-actions">
+          <button type="button" className="action-button" onClick={() => window.location.reload()}>Reintentar</button>
+          <button type="button" className="ghost" onClick={this.props.onBackToProfiles}>Volver a perfiles</button>
+        </div>
+      </section>
+    )
+  }
+}
 
 export type AppTab = 'profiles' | 'dashboard' | 'capture' | 'planning' | 'imports' | 'knowledge' | 'privacy' | 'more'
 
@@ -182,17 +211,19 @@ export interface ShellProfileState {
   onResetProfile: () => void
   onDeleteProfile: (id: string) => void
   onDeleteAllProfiles: () => void
-  onUpdateProfile: (profile: FinancialProfile) => void
+  onUpdateProfile: (profile: FinancialProfile) => Promise<void>
   onCreateGoalFromPlanning: () => void
 }
 
 export interface ShellDocumentState {
+  canUndoLatestImport: boolean
   importMessage: string
   isImporting: boolean
   importQueue: string[]
   onFiles: (files: File[], mode: 'current' | 'new') => void
   onReanalyzePersistedDocuments: () => void
   onApplyReviewedDocumentMovements: (documentId: string, fields?: ReviewedDocumentFields) => void
+  onUndoLatestImport: () => Promise<void>
 }
 
 interface MainAppShellProps {
@@ -229,9 +260,15 @@ export function MainAppShell({ navigation, profile, documents, metrics }: MainAp
     onApplyReviewedDocumentMovements,
     onFiles,
     onReanalyzePersistedDocuments,
+    canUndoLatestImport,
+    onUndoLatestImport,
   } = documents
 
   const section = sectionCopy[activeTab]
+  const workspaceMessageIsAlert = /otra pestana|recarga el perfil|excede el limite de persistencia/i.test(profileMessage)
+  const showWorkspaceMessage =
+    activeTab !== 'profiles' && activeTab !== 'capture' &&
+    (profileMessage === 'Datos de ejemplo restaurados para este espacio.' || workspaceMessageIsAlert)
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Navegacion principal">
@@ -323,8 +360,8 @@ export function MainAppShell({ navigation, profile, documents, metrics }: MainAp
           </div>
         </header>
 
-        {activeTab !== 'profiles' && profileMessage === 'Datos de ejemplo restaurados para este espacio.' && (
-          <p className="workspace-message" aria-live="polite">{profileMessage}</p>
+        {showWorkspaceMessage && (
+          <p className="workspace-message" role={workspaceMessageIsAlert ? 'alert' : 'status'}>{profileMessage}</p>
         )}
 
         {activeTab === 'profiles' ? (
@@ -357,6 +394,7 @@ export function MainAppShell({ navigation, profile, documents, metrics }: MainAp
 
         <ProfileCreationSlot creation={creation} />
 
+        <SectionErrorBoundary key={`${currentProfile.id}:${activeTab}`} onBackToProfiles={() => onSwitchTab('profiles')}>
         <Suspense fallback={<section className="panel loading-panel" role="status">Cargando vista...</section>}>
           {activeTab === 'dashboard' && (
             <Dashboard
@@ -380,6 +418,8 @@ export function MainAppShell({ navigation, profile, documents, metrics }: MainAp
               onFiles={onFiles}
               onReanalyzePersistedDocuments={onReanalyzePersistedDocuments}
               onApplyReviewedDocumentMovements={onApplyReviewedDocumentMovements}
+              canUndoLatestImport={canUndoLatestImport}
+              onUndoLatestImport={onUndoLatestImport}
             />
           )}
           {activeTab === 'more' && (
@@ -404,6 +444,7 @@ export function MainAppShell({ navigation, profile, documents, metrics }: MainAp
           {activeTab === 'knowledge' && <KnowledgeMatrix />}
           {activeTab === 'privacy' && <PrivacyPanel />}
         </Suspense>
+        </SectionErrorBoundary>
       </section>
     </main>
   )

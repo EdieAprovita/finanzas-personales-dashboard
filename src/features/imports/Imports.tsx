@@ -35,6 +35,8 @@ export function Imports({
   onFiles,
   onReanalyzePersistedDocuments,
   onApplyReviewedDocumentMovements,
+  canUndoLatestImport,
+  onUndoLatestImport,
 }: {
   profile: FinancialProfile
   importMessage: string
@@ -43,8 +45,12 @@ export function Imports({
   onFiles: (files: File[], mode: 'current' | 'new') => void
   onReanalyzePersistedDocuments: () => void
   onApplyReviewedDocumentMovements: (documentId: string, fields?: ReviewedDocumentFields) => void
+  canUndoLatestImport: boolean
+  onUndoLatestImport: () => Promise<void>
 }) {
   const [documentFilter, setDocumentFilter] = useState<'all' | 'needs_review' | 'processed' | 'rejected'>('all')
+  const [isUndoingLatestImport, setIsUndoingLatestImport] = useState(false)
+  const [isUndoConfirmationPending, setIsUndoConfirmationPending] = useState(false)
   const quality = useMemo(() => analyzeDocumentQuality(profile), [profile])
   const visibleDocuments = useMemo(
     () =>
@@ -73,6 +79,21 @@ export function Imports({
     }
   }, [profile.importedDocuments])
 
+  async function handleUndoLatestImport(): Promise<void> {
+    if (isImporting || isUndoingLatestImport) return
+    if (!isUndoConfirmationPending) {
+      setIsUndoConfirmationPending(true)
+      return
+    }
+    setIsUndoingLatestImport(true)
+    try {
+      await onUndoLatestImport()
+    } finally {
+      setIsUndoingLatestImport(false)
+      setIsUndoConfirmationPending(false)
+    }
+  }
+
   return (
     <div className="dashboard-grid">
       <ImportEntryPanel
@@ -82,6 +103,24 @@ export function Imports({
         isImporting={isImporting}
         onFiles={onFiles}
       />
+      {canUndoLatestImport && (
+        <section className="panel" aria-labelledby="undo-import-title">
+          <h2 id="undo-import-title">Deshacer ultima importacion</h2>
+          <p>Restaura el perfil al estado anterior al ultimo lote importado. Si ese lote creo el perfil, tambien lo elimina.</p>
+          {isUndoConfirmationPending && <p role="alert">Confirma para deshacer el lote completo.</p>}
+          <button
+            type="button"
+            className="ghost"
+            disabled={isImporting || isUndoingLatestImport}
+            onClick={() => void handleUndoLatestImport()}
+          >
+            {isUndoingLatestImport ? 'Deshaciendo...' : isUndoConfirmationPending ? 'Confirmar deshacer' : 'Deshacer importacion'}
+          </button>
+          {isUndoConfirmationPending && !isUndoingLatestImport && (
+            <button type="button" className="ghost" onClick={() => setIsUndoConfirmationPending(false)}>Cancelar</button>
+          )}
+        </section>
+      )}
       <DocumentQualityPanel
         quality={quality}
         onReanalyzePersistedDocuments={onReanalyzePersistedDocuments}

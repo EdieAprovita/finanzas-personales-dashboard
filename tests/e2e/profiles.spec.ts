@@ -20,7 +20,7 @@ async function seedExampleProfiles(page: Page) {
 
   for (const profile of exampleProfiles) {
     const response = await page.request.put(`/api/profiles/${encodeURIComponent(profile.id)}`, {
-      headers: apiHeaders,
+      headers: { ...apiHeaders, 'if-none-match': '*' },
       data: profile,
     })
     expect(response.ok()).toBe(true)
@@ -158,7 +158,12 @@ test('restores an example only from its dashboard and confirms the result', asyn
     accounts: [],
     transactions: [],
   }
-  const updateResponse = await page.request.put(`/api/profiles/${encodeURIComponent(modifiedExample.id)}`, { headers: apiHeaders, data: modifiedExample })
+  const currentProfilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
+  const currentProfilesBody = (await currentProfilesResponse.json()) as { revisions: Record<string, number> }
+  const updateResponse = await page.request.put(`/api/profiles/${encodeURIComponent(modifiedExample.id)}`, {
+    headers: { ...apiHeaders, 'if-match': `"profile-${currentProfilesBody.revisions[modifiedExample.id]}"` },
+    data: modifiedExample,
+  })
   expect(updateResponse.ok()).toBe(true)
   await page.goto('/')
 
@@ -174,6 +179,35 @@ test('restores an example only from its dashboard and confirms the result', asyn
   const restored = body.profiles.find((profile) => profile.id === exampleProfiles[0].id)
   expect(restored?.accounts).toEqual(exampleProfiles[0].accounts)
   expect(restored?.transactions).toEqual(exampleProfiles[0].transactions)
+})
+
+test('blocks a stale tab and keeps the first saved change', async ({ page, context }) => {
+  await seedExampleProfiles(page)
+  await page.goto('/')
+  const stalePage = await context.newPage()
+  await stalePage.addInitScript((token) => window.sessionStorage.setItem('finanzas-api-access-token', token), testAccessToken)
+  await stalePage.goto('/')
+
+  for (const candidate of [page, stalePage]) {
+    await candidate.locator('.profile-card').first().getByRole('button', { name: /Abrir resumen/i }).click()
+    await candidate.getByLabel('Registrar').click()
+  }
+
+  await page.getByPlaceholder('Cuenta nómina').fill('Cuenta vigente E2E')
+  await page.getByPlaceholder('25000').fill('1500')
+  await page.getByRole('button', { name: 'Agregar cuenta' }).click()
+  await expect(page.locator('.recent-ledger').getByText(/Cuenta vigente E2E/)).toBeVisible()
+
+  await stalePage.getByPlaceholder('Cuenta nómina').fill('Cuenta obsoleta E2E')
+  await stalePage.getByPlaceholder('25000').fill('2500')
+  await stalePage.getByRole('button', { name: 'Agregar cuenta' }).click()
+  await expect(stalePage.getByRole('alert')).toContainText('Otra pestana modifico este perfil')
+  await expect(stalePage.getByText('Cuenta obsoleta E2E')).toHaveCount(0)
+
+  const profilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
+  const body = (await profilesResponse.json()) as { profiles: FinancialProfile[] }
+  const savedProfile = body.profiles.find((profile) => profile.accounts.some((account) => account.name === 'Cuenta vigente E2E'))
+  expect(savedProfile?.accounts.some((account) => account.name === 'Cuenta obsoleta E2E')).toBe(false)
 })
 
 test('switches the financial history range from dashboard controls', async ({ page }) => {
@@ -406,6 +440,7 @@ test('records a card purchase and payment without double-counting the debt', asy
   await accountPanel.getByLabel('Nombre').fill('E2E Nómina')
   await accountPanel.getByLabel('Saldo actual').fill('10000')
   await accountPanel.getByRole('button', { name: /Agregar cuenta/i }).click()
+  await expect(page.getByRole('status')).toContainText('Cuenta agregada.')
 
   await accountPanel.getByLabel('Nombre').fill('E2E Tarjeta')
   await accountPanel.getByLabel('Tipo').selectOption('credit_card')
@@ -414,12 +449,15 @@ test('records a card purchase and payment without double-counting the debt', asy
   await accountPanel.getByLabel('Pago mínimo').fill('100')
   await accountPanel.getByLabel('Fecha límite').fill('2026-07-31')
   await accountPanel.getByRole('button', { name: /Agregar cuenta/i }).click()
+  const recentData = page.locator('.recent-ledger')
+  await expect(recentData.getByText(/E2E Tarjeta/).first()).toBeVisible()
 
   const movementPanel = page.locator('.capture-card').filter({ has: page.getByRole('heading', { name: 'Registrar movimiento' }) })
   await movementPanel.getByLabel('Cuenta').selectOption({ label: 'E2E Tarjeta' })
   await movementPanel.getByLabel('Monto').fill('350')
   await movementPanel.getByLabel('Comercio / origen').fill('Compra tarjeta E2E')
   await movementPanel.getByRole('button', { name: /Guardar movimiento/i }).click()
+  await expect(recentData.getByText(/Compra tarjeta E2E/)).toBeVisible()
 
   await movementPanel.getByLabel('Tipo').selectOption('debt_payment')
   await movementPanel.getByLabel('Cuenta de origen').selectOption({ label: 'E2E Nómina' })
@@ -427,6 +465,7 @@ test('records a card purchase and payment without double-counting the debt', asy
   await movementPanel.getByLabel('Monto').fill('100')
   await movementPanel.getByLabel('Comercio / origen').fill('Pago tarjeta E2E')
   await movementPanel.getByRole('button', { name: /Guardar movimiento/i }).click()
+  await expect(recentData.getByText(/Pago tarjeta E2E/)).toBeVisible()
 
   const profilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
   const body = (await profilesResponse.json()) as { profiles: FinancialProfile[] }
@@ -618,7 +657,7 @@ test('imports synthetic CSV, XML and receipt image into the active profile', asy
   await expect(page.getByRole('button', { name: /Actualizar diagnóstico guardado/i })).toBeVisible()
   await page.getByRole('button', { name: /Actualizar diagnóstico guardado/i }).click()
   await expect(page.getByText(/Reanalisis local actualizado|ya estaban alineados/i)).toBeVisible()
-  await expect(page.getByText(/Reanalisis local actualizado en 12 documento\(s\)/i)).toBeVisible()
+  await expect(page.getByText(/Reanalisis local actualizado en 11 documento\(s\)/i)).toBeVisible()
   await expect(page.getByLabel('Estado de captura de documentos')).toContainText('Extractor actual')
 
   const bankStatementDocument = documentCards
@@ -1485,8 +1524,9 @@ test('shows privacy controls and local-data messaging', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Privacidad operativa' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Datos locales' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Minimizacion' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Protección pendiente' })).toBeVisible()
-  await expect(page.getByText(/activa cifrado fuerte/i)).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Backups cifrados' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Cifrado pendiente' })).toBeVisible()
+  await expect(page.getByText(/crea y valida copias cifradas/i)).toBeVisible()
 })
 
 
@@ -1506,4 +1546,89 @@ test('requires pairing and rejects forged origin through the Vite proxy', async 
   await pairingPage.reload()
   await expect(pairingPage.locator('[aria-label="Perfiles financieros"]')).toBeVisible()
   await pairingPage.close()
+})
+
+test('keeps the active section in the URL and restores browser history', async ({ page }) => {
+  const profileCard = page.locator('.profile-card', { hasText: 'Ahorro saludable' })
+  await profileCard.getByRole('button', { name: /Abrir resumen/i }).click()
+  await expect(page).toHaveURL(/section=dashboard/)
+  await page.locator('.tabs').getByRole('button', { name: 'Registrar' }).click()
+  await expect(page).toHaveURL(/section=capture/)
+  await page.goBack()
+  await expect(page).toHaveURL(/section=dashboard/)
+  await expect(page.getByRole('heading', { name: 'Resumen financiero' })).toBeVisible()
+  await page.goForward()
+  await expect(page.getByRole('heading', { name: 'Registrar actividad' })).toBeVisible()
+
+  await page.goto('/?section=imports')
+  await expect(page.getByRole('heading', { name: 'Documentos' })).toBeVisible()
+  await page.goto('/?section=desconocida')
+  await expect(page).not.toHaveURL(/section=/)
+  await expect(page.locator('[aria-label="Perfiles financieros"]')).toBeVisible()
+})
+
+test('shows an accessible recovery state when a lazy section cannot load', async ({ page }) => {
+  await page.route('**/src/features/planning/Planning.tsx*', (route) => route.abort())
+  await page.goto('/?section=planning')
+  const recovery = page.getByRole('alert')
+  await expect(recovery).toContainText('No se pudo cargar esta área')
+  await expect(recovery.getByRole('button', { name: 'Reintentar' })).toBeVisible()
+  await recovery.getByRole('button', { name: 'Volver a perfiles' }).click()
+  await expect(page.locator('[aria-label="Perfiles financieros"]')).toBeVisible()
+})
+
+test('keeps capture controls accessible at 320 px', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-chrome')
+  await page.setViewportSize({ width: 320, height: 700 })
+  const profileCard = page.locator('.profile-card', { hasText: 'Ahorro saludable' })
+  await profileCard.getByRole('button', { name: /Abrir resumen/i }).click()
+  await page.getByRole('button', { name: 'Registrar' }).click()
+  await page.locator('#capture-account').getByRole('button', { name: 'Agregar cuenta' }).click()
+  await expect(page.getByRole('alert')).toContainText('Revisa nombre, saldo y limite')
+  const sizes = await page.locator('.capture-task-tabs button, .recent-ledger-grid button').evaluateAll((buttons) =>
+    buttons.map((button) => ({ width: button.getBoundingClientRect().width, height: button.getBoundingClientRect().height })),
+  )
+  expect(sizes.length).toBeGreaterThan(4)
+  expect(sizes.every((size) => size.width >= 44 && size.height >= 44)).toBe(true)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('undoes only the latest imported batch', async ({ page }) => {
+  const profilesResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
+  const body = await profilesResponse.json() as { profiles: FinancialProfile[]; revisions: Record<string, number> }
+  const original = body.profiles.find((profile) => profile.id === exampleProfiles[0].id)
+  expect(original).toBeTruthy()
+  const firstBatch = { ...original!, description: 'Cambio sintetico del primer lote.' }
+  const firstImportResponse = await page.request.put('/api/profiles/' + encodeURIComponent(firstBatch.id), {
+    headers: {
+      ...apiHeaders,
+      'if-match': '"profile-' + body.revisions[firstBatch.id] + '"',
+      'x-finanzas-operation': 'import_batch',
+    },
+    data: firstBatch,
+  })
+  expect(firstImportResponse.ok()).toBe(true)
+  const firstImport = await firstImportResponse.json() as { revision: number }
+  const latestBatch = { ...firstBatch, description: 'Cambio sintetico del ultimo lote.' }
+  const latestImportResponse = await page.request.put('/api/profiles/' + encodeURIComponent(latestBatch.id), {
+    headers: {
+      ...apiHeaders,
+      'if-match': '"profile-' + firstImport.revision + '"',
+      'x-finanzas-operation': 'import_batch',
+    },
+    data: latestBatch,
+  })
+  expect(latestImportResponse.ok()).toBe(true)
+
+  await page.goto('/?section=imports')
+  await page.getByRole('button', { name: 'Deshacer importacion' }).click()
+  await expect(page.getByRole('alert')).toContainText('Confirma para deshacer')
+  await page.getByRole('button', { name: 'Confirmar deshacer' }).click()
+  await expect(page.getByText('Ultima importacion deshecha.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Deshacer importacion' })).toHaveCount(0)
+
+  const restoredResponse = await page.request.get('/api/profiles', { headers: apiHeaders })
+  const restored = (await restoredResponse.json() as { profiles: FinancialProfile[] }).profiles
+    .find((profile) => profile.id === latestBatch.id)
+  expect(restored?.description).toBe(firstBatch.description)
 })

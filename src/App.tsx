@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { exampleProfiles } from './domain/exampleData'
 import { calculateMetrics } from './domain/finance'
@@ -12,6 +12,7 @@ import { reanalyzePersistedDocuments } from './features/imports/documentQuality'
 import type { ReviewedDocumentFields } from './lib/importers'
 import { useProfileRepository } from './features/profile/useProfileRepository'
 import { setApiAccessToken } from './lib/api'
+import { civilDate, civilMonth } from './lib/civilDate'
 
 function safeImportQueueLabel(file: File, index: number) {
   const extension = file.name.split('.').at(-1)?.toUpperCase().replace(/[^A-Z0-9]/g, '') || 'DOC'
@@ -22,8 +23,24 @@ function safeUserMessage(message: string) {
   return message.replace(/\b[^\s/\\]+\.(pdf|csv|xml|png|jpg|jpeg|webp)\b/gi, 'archivo')
 }
 
+const appTabs: AppTab[] = ['profiles', 'dashboard', 'capture', 'planning', 'imports', 'knowledge', 'privacy', 'more']
+
+function tabFromLocation(): AppTab {
+  const section = new URL(window.location.href).searchParams.get('section')
+  return appTabs.includes(section as AppTab) ? section as AppTab : 'profiles'
+}
+
+function updateTabLocation(tab: AppTab, method: 'pushState' | 'replaceState'): void {
+  const url = new URL(window.location.href)
+  if (tab === 'profiles') url.searchParams.delete('section')
+  else url.searchParams.set('section', tab)
+  const next = `${url.pathname}${url.search}${url.hash}`
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  if (next !== current) window.history[method](null, '', next)
+}
+
 function App() {
-  const asOfDate = new Date().toISOString().slice(0, 10)
+  const asOfDate = civilDate()
   const {
     activeProfileId,
     activateProfile,
@@ -38,6 +55,8 @@ function App() {
     reportingPeriod,
     selectProfile,
     setReportingPeriod,
+    undoableImportProfileIds,
+    undoLatestImportForProfile,
     updateReportingPeriod,
   } = useProfileRepository(asOfDate)
   const [importMessage, setImportMessage] = useState('')
@@ -54,18 +73,34 @@ function App() {
   const [includeStarterGoal, setIncludeStarterGoal] = useState(false)
   const [starterGoal, setStarterGoal] = useState<GoalFormState>(() => defaultGoalForm('savings', asOfDate))
   const [starterGoalError, setStarterGoalError] = useState('')
-  const [activeTab, setActiveTab] = useState<AppTab>('profiles')
+  const [activeTab, setActiveTab] = useState<AppTab>(tabFromLocation)
 
   const metrics = useMemo(
     () => (currentProfile ? calculateMetrics(currentProfile, { period: reportingPeriod, asOfDate }) : null),
     [asOfDate, currentProfile, reportingPeriod],
   )
 
+  useEffect(() => {
+    const section = new URL(window.location.href).searchParams.get('section')
+    if (section && !appTabs.includes(section as AppTab)) updateTabLocation('profiles', 'replaceState')
+    const onPopState = () => {
+      const tab = tabFromLocation()
+      if (tab !== 'profiles') {
+        setPendingDeleteProfileId('')
+        setPendingDeleteAllProfiles(false)
+      }
+      setActiveTab(tab)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
   function switchTab(tab: AppTab) {
     if (tab !== 'profiles') {
       setPendingDeleteProfileId('')
       setPendingDeleteAllProfiles(false)
     }
+    updateTabLocation(tab, 'pushState')
     setActiveTab(tab)
   }
 
@@ -98,7 +133,7 @@ function App() {
   function openDashboardForProfile(id = activeProfileId): void {
     const selectedProfile = profiles.find((profile) => profile.id === id) ?? currentProfile
     if (!selectedProfile) {
-      setActiveTab('profiles')
+      switchTab('profiles')
       return
     }
 
@@ -107,7 +142,7 @@ function App() {
     setProfileMessage('')
     setPendingDeleteProfileId('')
     setPendingDeleteAllProfiles(false)
-    setActiveTab('dashboard')
+    switchTab('dashboard')
   }
   async function handleReset() {
     if (!currentProfile) return
@@ -175,7 +210,7 @@ function App() {
       ].map((category) => ({ category, monthlyLimit: 0 })),
       monthlySnapshots: [
         {
-          month: new Date().toISOString().slice(0, 7),
+          month: civilMonth(),
           income: 0,
           expenses: 0,
           debtPayments: 0,
@@ -225,7 +260,7 @@ function App() {
       ),
       monthlySnapshots: [
         {
-          month: new Date().toISOString().slice(0, 7),
+          month: civilMonth(),
           income: 0,
           expenses: 0,
           debtPayments: 0,
@@ -250,7 +285,7 @@ function App() {
       const result = await importFinancialFiles(baseProfile, files)
       const importedProfile = mode === 'new' ? enrichImportedProfileName(result.profile, result.documents) : result.profile
       const recalculatedProfile = recalculateLatestSnapshot(importedProfile, asOfDate)
-      await persistProfile(recalculatedProfile)
+      await persistProfile(recalculatedProfile, { operation: 'import_batch' })
       activateProfile(recalculatedProfile)
       switchTab('imports')
       setPendingDeleteProfileId('')
@@ -270,10 +305,13 @@ function App() {
       const recalculatedProfile = recalculateLatestSnapshot(profile, asOfDate)
       await persistProfile(recalculatedProfile)
       updateReportingPeriod(recalculatedProfile)
+      setProfileMessage('')
+      setImportMessage('')
     } catch (error) {
       const message = error instanceof Error ? error.message : 'No se pudo guardar el perfil.'
       setProfileMessage(message)
       setImportMessage(message)
+      throw error
     }
   }
 
@@ -313,6 +351,23 @@ function App() {
     }
   }
 
+  async function handleUndoLatestImport() {
+    if (!currentProfile) return
+    try {
+      const deleted = await undoLatestImportForProfile(currentProfile.id)
+      const message = deleted
+        ? 'Ultima importacion deshecha. El perfil creado por ese lote fue eliminado.'
+        : 'Ultima importacion deshecha.'
+      setImportMessage(deleted ? '' : message)
+      setProfileMessage(message)
+      switchTab(deleted ? 'profiles' : 'imports')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo deshacer la importacion.'
+      setImportMessage(message)
+      setProfileMessage(message)
+    }
+  }
+
   async function handleDeleteProfile(id: string): Promise<void> {
     const targetProfile = profiles.find((profile) => profile.id === id)
     if (!targetProfile) return
@@ -328,7 +383,7 @@ function App() {
     try {
       const nextProfiles = await deleteStoredProfile(id)
       setPendingDeleteProfileId('')
-      setActiveTab('profiles')
+      switchTab('profiles')
       setProfileMessage(
         nextProfiles.length === 0
           ? targetName + ' fue eliminado. Crea un perfil nuevo para empezar con datos reales.'
@@ -351,7 +406,7 @@ function App() {
 
     try {
       await deleteAllStoredProfiles()
-      setActiveTab('profiles')
+    switchTab('profiles')
       setPendingDeleteAllProfiles(false)
       setPendingDeleteProfileId('')
       setProfileMessage('Todos los perfiles fueron eliminados. Crea un perfil nuevo para empezar con datos reales.')
@@ -465,19 +520,21 @@ function App() {
         onResetProfile: () => void handleReset(),
         onDeleteProfile: (id) => void handleDeleteProfile(id),
         onDeleteAllProfiles: () => void handleDeleteAllProfiles(),
-        onUpdateProfile: (next) => void updateProfile(next),
+          onUpdateProfile: updateProfile,
         onCreateGoalFromPlanning: () => {
           switchTab('capture')
           setProfileMessage('Crea una meta y después regresa Planeación para revisar su factibilidad.')
         },
       }}
       documents={{
+        canUndoLatestImport: undoableImportProfileIds.has(currentProfile.id),
         importMessage,
         isImporting,
         importQueue,
         onFiles: (files, mode) => void handleFiles(files, mode),
         onReanalyzePersistedDocuments: () => void handleReanalyzePersistedDocuments(),
-    onApplyReviewedDocumentMovements: (documentId, fields) => void handleApplyReviewedDocumentMovements(documentId, fields),
+        onApplyReviewedDocumentMovements: (documentId, fields) => void handleApplyReviewedDocumentMovements(documentId, fields),
+        onUndoLatestImport: handleUndoLatestImport,
       }}
       metrics={metrics}
     />

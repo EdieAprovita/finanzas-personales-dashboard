@@ -3,11 +3,13 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url'
 import { readCsvFileText } from './csvText'
 import { parseCsvTable } from './csvTable'
 import { assertPdfPageBudget, assertPdfOcrPixelBudget } from './pdfLimits'
+import { ImageBudgetError, assertImageBatchBudget, assertImageDimensionsWithinBudget, assertImageOcrBudget, computeOcrCanvasDimensions } from './imageLimits'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import type { Account, DocumentKind, FinancialProfile, ImportedDocument, InvestmentPosition, Transaction } from '../../domain/types'
 import { enrichSnapshotsWithDocumentPositions } from '../../domain/snapshots'
 import { expectedFieldKeysForExtracted } from '../documentFieldSpecs'
+import { civilDate } from '../civilDate'
 import type {
   ApplyReviewedMovementsResult,
   ExtractedFacts,
@@ -1355,22 +1357,26 @@ async function canvasToBlob(canvas: HTMLCanvasElement) {
 }
 
 async function prepareImageForOcr(image: File | string): Promise<File | string> {
-  if (
-    typeof image === 'string' ||
-    typeof document === 'undefined' ||
-    typeof createImageBitmap === 'undefined' ||
-    typeof File === 'undefined'
-  ) {
-    return image
-  }
+  if (typeof image === 'string') return image
+  const declaredDimensions = await assertImageOcrBudget(image)
+  if (typeof document === 'undefined' || typeof createImageBitmap === 'undefined' || typeof File === 'undefined') return image
 
+  let bitmap: ImageBitmap | undefined
+  let canvas: HTMLCanvasElement | undefined
   try {
-    const bitmap = await createImageBitmap(image)
-    const longestSide = Math.max(bitmap.width, bitmap.height)
-    const scale = Math.min(3, Math.max(1.35, 2200 / Math.max(1, longestSide)))
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.ceil(bitmap.width * scale)
-    canvas.height = Math.ceil(bitmap.height * scale)
+    bitmap = await createImageBitmap(image)
+    const decodedDimensions = assertImageDimensionsWithinBudget({
+      width: bitmap.width,
+      height: bitmap.height,
+      pixels: bitmap.width * bitmap.height,
+    })
+    if (decodedDimensions.width !== declaredDimensions.width || decodedDimensions.height !== declaredDimensions.height) {
+      throw new ImageBudgetError('Las dimensiones decodificadas no coinciden con la cabecera de la imagen.')
+    }
+    const target = computeOcrCanvasDimensions(decodedDimensions)
+    canvas = document.createElement('canvas')
+    canvas.width = target.width
+    canvas.height = target.height
     const context = canvas.getContext('2d')
     if (!context) return image
 
@@ -1392,8 +1398,15 @@ async function prepareImageForOcr(image: File | string): Promise<File | string> 
 
     const blob = await canvasToBlob(canvas)
     return blob ? new File([blob], `${slug(image.name)}-ocr.png`, { type: 'image/png' }) : image
-  } catch {
+  } catch (error) {
+    if (error instanceof ImageBudgetError) throw error
     return image
+  } finally {
+    bitmap?.close()
+    if (canvas) {
+      canvas.width = 0
+      canvas.height = 0
+    }
   }
 }
 
@@ -2147,7 +2160,7 @@ function upsertCreditCardDebt(
       creditLimit: details.creditLimit,
       paymentToAvoidInterest: details.paymentToAvoidInterest,
       cutoffDate: details.cutoffDate,
-      dueDate: details.dueDate ?? new Date().toISOString().slice(0, 10),
+      dueDate: details.dueDate ?? civilDate(),
       currency: details.currency ?? 'MXN',
     },
     ...profile.debts,
@@ -2255,13 +2268,12 @@ function deriveMonthlySnapshots(profile: FinancialProfile): FinancialProfile {
       netWorth,
     }))
 
-  const avgIncome =
-    snapshots.reduce((sum, snapshot) => sum + snapshot.income, 0) / Math.max(1, snapshots.filter((row) => row.income > 0).length)
+  const latestObservedIncome = snapshots.findLast((snapshot) => snapshot.income > 0)?.income
 
   return {
     ...profile,
-    grossMonthlyIncome: Math.max(profile.grossMonthlyIncome, avgIncome),
-    netMonthlyIncome: Math.max(profile.netMonthlyIncome, avgIncome),
+    grossMonthlyIncome: latestObservedIncome ?? profile.grossMonthlyIncome,
+    netMonthlyIncome: latestObservedIncome ?? profile.netMonthlyIncome,
     monthlySnapshots: enrichSnapshotsWithDocumentPositions(profile, snapshots.length ? snapshots : profile.monthlySnapshots),
   }
 }
@@ -2776,6 +2788,9 @@ export function applyReviewedStatementMovements(profile: FinancialProfile, docum
 }
 
 export async function importFinancialFiles(profile: FinancialProfile, files: File[]): Promise<ImportBatchResult> {
+  const imageDimensions = await Promise.all(files.filter(isImageFile).map(assertImageOcrBudget))
+  assertImageBatchBudget(imageDimensions)
+
   let nextProfile = profile
   const documents: ImportedDocument[] = []
 
@@ -3424,6 +3439,7 @@ async function importCsv(profile: FinancialProfile, file: File): Promise<ImportR
 }
 
 async function importImage(profile: FinancialProfile, file: File): Promise<ImportResult> {
+  await assertImageOcrBudget(file)
   const fingerprint = await documentFingerprint(file)
   let ocr: OcrResult
   try {
@@ -3706,11 +3722,18 @@ async function importXml(profile: FinancialProfile, file: File): Promise<ImportR
     ],
   }
 
+  const latestIncomeDate = transactionMerge.transactions
+    .filter((transaction) => transaction.type === 'income' && transaction.amount > 0)
+    .map((transaction) => transaction.date)
+    .sort((a, b) => a.localeCompare(b))
+    .at(-1)
+  const updatesCurrentIncome = transactions.length > 0 && fechaPago === latestIncomeDate
+
   return {
     profile: {
       ...profile,
-      grossMonthlyIncome: transactions.length ? Math.max(profile.grossMonthlyIncome, totalPercepciones) : profile.grossMonthlyIncome,
-      netMonthlyIncome: transactions.length ? Math.max(profile.netMonthlyIncome, netIncome) : profile.netMonthlyIncome,
+      grossMonthlyIncome: updatesCurrentIncome ? totalPercepciones : profile.grossMonthlyIncome,
+      netMonthlyIncome: updatesCurrentIncome ? netIncome : profile.netMonthlyIncome,
       accounts: nextAccounts,
       transactions: transactionMerge.transactions,
       importedDocuments: mergeDocument(profile, document),

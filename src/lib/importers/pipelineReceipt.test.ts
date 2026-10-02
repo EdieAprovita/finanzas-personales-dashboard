@@ -5,7 +5,18 @@ vi.mock('tesseract.js', () => ({ createWorker: async () => ({
   recognize: async () => ({ data: { text: 'TIENDA DEMO\n2026-06-08\nTOTAL 1250.50', confidence: 99 } }),
 }) }))
 import type { FinancialProfile } from '../../domain/types'
-import { applyReviewedDocument, importFinancialFile } from './pipeline'
+import { applyReviewedDocument, importFinancialFile, importFinancialFiles } from './pipeline'
+
+function syntheticPng(width = 760, height = 420): File {
+  const bytes = new Uint8Array(24)
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10], 0)
+  const view = new DataView(bytes.buffer)
+  view.setUint32(8, 13)
+  bytes.set([73, 72, 68, 82], 12)
+  view.setUint32(16, width)
+  view.setUint32(20, height)
+  return new File([bytes], 'receipt.png', { type: 'image/png' })
+}
 
 const emptyProfile = (): FinancialProfile => ({
   schemaVersion: 2, reportingCurrency: 'MXN', id: 'receipt-test', name: 'Receipt test', description: '',
@@ -14,8 +25,23 @@ const emptyProfile = (): FinancialProfile => ({
 })
 
 describe('receipt manual approval', () => {
+  it('rejects an extreme image before invoking the browser decoder', async () => {
+    const decoder = vi.fn()
+    vi.stubGlobal('createImageBitmap', decoder)
+
+    await expect(importFinancialFile(emptyProfile(), syntheticPng(100_000, 100_000))).rejects.toThrow('limite seguro')
+    expect(decoder).not.toHaveBeenCalled()
+
+    vi.unstubAllGlobals()
+  })
+
+  it('rejects image batches above the shared pixel budget', async () => {
+    const files = [syntheticPng(5000, 3000), syntheticPng(5000, 3000), syntheticPng(5000, 3000)]
+    await expect(importFinancialFiles(emptyProfile(), files)).rejects.toThrow('El lote excede el limite seguro')
+  })
+
   it('keeps high-confidence OCR pending, applies reviewed values once, and preserves approval on reimport', async () => {
-    const file = new File(['synthetic image'], 'receipt.png', { type: 'image/png' })
+    const file = syntheticPng()
     const result = await importFinancialFile(emptyProfile(), file)
     expect(result.document.status).toBe('needs_review')
     expect(result.document.extracted?.ocrConfidence).toBe(0.99)
@@ -33,7 +59,7 @@ describe('receipt manual approval', () => {
     expect(reimported.profile.importedDocuments[0]?.extracted).toMatchObject({ reviewedMovementRowsApproval: 'manual_user_action', total: 120, date: '2026-06-09', merchant: 'Comercio revisado' })
   })
   it('rejects invalid review fields without changing the profile', async () => {
-    const result = await importFinancialFile(emptyProfile(), new File(['image'], 'receipt.png', { type: 'image/png' }))
+    const result = await importFinancialFile(emptyProfile(), syntheticPng())
     for (const total of [0, -1, NaN, Infinity]) expect(() => applyReviewedDocument(result.profile, result.document.id, { total })).toThrow()
     expect(() => applyReviewedDocument(result.profile, result.document.id, { date: '2026-02-30' })).toThrow()
     expect(() => applyReviewedDocument(result.profile, result.document.id, { merchant: ' ' })).toThrow()
