@@ -1,5 +1,8 @@
 import { chromium, expect } from '@playwright/test'
 
+const accessToken = process.env.FINANZAS_API_TOKEN?.trim()
+if (!accessToken) throw new Error('Configura FINANZAS_API_TOKEN con la clave de acceso de la API.')
+
 const url = process.env.FINANZAS_LAN_URL ?? 'http://192.168.1.90:5173/'
 const screenshotPath = process.env.FINANZAS_LAN_SCREENSHOT ?? 'reports/finanzas-real-lan-desktop-profiles-fixed.png'
 const viewport = {
@@ -16,14 +19,17 @@ page.on('console', (message) => consoleMessages.push(`${message.type()}: ${messa
 page.on('pageerror', (error) => pageErrors.push(error.message))
 
 try {
+  await page.addInitScript((token) => {
+    window.sessionStorage.setItem('finanzas-api-access-token', token)
+  }, accessToken)
   await page.goto(url)
 
   const profileStrip = page.locator('[aria-label="Perfiles financieros"]')
-  const emptyState = page.getByRole('heading', { name: 'Empieza limpio, con datos por perfil' })
+  const emptyState = page.getByRole('heading', { name: 'Empieza con tu información financiera' })
   await expect(profileStrip.or(emptyState)).toBeVisible()
 
   const profilesUrl = new URL('/api/profiles', url).toString()
-  const response = await page.request.get(profilesUrl)
+  const response = await page.request.get(profilesUrl, { headers: { authorization: `Bearer ${accessToken}` } })
   if (!response.ok()) throw new Error(`API profiles respondio ${response.status()}`)
   const body = await response.json()
 

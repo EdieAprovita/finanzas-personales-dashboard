@@ -1,4 +1,16 @@
 import type { FinancialProfile, ImportedDocument, MonthlySnapshot } from './types'
+import { documentNeedsReconciliation } from './documentReconciliation'
+
+function isCivilDate(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return false
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
 
 function finiteDocumentFact(document: ImportedDocument, key: string) {
   const value = document.extracted?.[key]
@@ -8,9 +20,69 @@ function finiteDocumentFact(document: ImportedDocument, key: string) {
 function documentSnapshotMonth(document: ImportedDocument) {
   const extracted = document.extracted ?? {}
   const date = [extracted.periodEnd, extracted.cutoffDate, extracted.statementDate].find(
-    (value): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value),
+    isCivilDate,
   )
   return date?.slice(0, 7)
+}
+
+function pendingDocumentAffectsMonth(profile: FinancialProfile, document: ImportedDocument, month: string) {
+  const extracted = document.extracted ?? {}
+  const datedMonths = [extracted.paymentDate, extracted.periodStart, extracted.periodEnd, extracted.cutoffDate, extracted.statementDate, extracted.date]
+    .filter(isCivilDate)
+    .map((value) => value.slice(0, 7))
+  const sourceTransactionMonths = (document.sourceTransactionIds ?? [])
+    .flatMap((id) => profile.transactions.find((transaction) => transaction.id === id)?.date.slice(0, 7) ?? [])
+
+  if (!datedMonths.length && !sourceTransactionMonths.length) return true
+  const periodStart = isCivilDate(extracted.periodStart) ? extracted.periodStart.slice(0, 7) : ''
+  const periodEnd = isCivilDate(extracted.periodEnd) ? extracted.periodEnd.slice(0, 7) : ''
+  return datedMonths.includes(month) || sourceTransactionMonths.includes(month) || Boolean(periodStart && periodEnd && periodStart <= month && month <= periodEnd)
+}
+
+export function monthlyCloseBlockers(profile: FinancialProfile, month: string, asOfDate?: string) {
+  const blockers: string[] = []
+  if (!profile.monthlySnapshots.some((snapshot) => snapshot.month === month)) blockers.push('No hay un snapshot para este periodo.')
+  if (asOfDate && month > asOfDate.slice(0, 7)) blockers.push('No puedes cerrar un periodo futuro.')
+  const pendingDocuments = profile.importedDocuments.filter(
+    (document) => documentNeedsReconciliation(document) && pendingDocumentAffectsMonth(profile, document, month),
+  ).length
+  if (pendingDocuments) blockers.push(`${pendingDocuments} documento(s) del periodo siguen pendientes de revision.`)
+  return blockers
+}
+
+export function closeMonthlySnapshot(profile: FinancialProfile, month: string, balanceAsOf: string, reconciledAt: string, asOfDate = balanceAsOf): FinancialProfile {
+  if (!isCivilDate(balanceAsOf) || balanceAsOf.slice(0, 7) !== month || balanceAsOf > asOfDate) {
+    throw new Error('La fecha de saldos debe pertenecer al periodo que quieres cerrar.')
+  }
+  const blockers = monthlyCloseBlockers(profile, month, asOfDate)
+  if (blockers.length) throw new Error(blockers.join(' '))
+
+  return {
+    ...profile,
+    monthlySnapshots: profile.monthlySnapshots.map((snapshot) => snapshot.month === month
+      ? { ...snapshot, balanceAsOf, reconciledAt }
+      : snapshot),
+  }
+}
+
+function preservedClose(previous: MonthlySnapshot | undefined, next: MonthlySnapshot) {
+  if (!previous?.balanceAsOf || !previous.reconciledAt) return {}
+  const unchanged = ['income', 'expenses', 'debtPayments', 'savings', 'netWorth', 'liquidCash', 'debtBalance', 'debtMinimumPayments', 'cardBalance', 'cardLimit']
+    .every((key) => previous[key as keyof typeof next] === next[key as keyof typeof next])
+  const sameSources = JSON.stringify([...(previous.sourceDocumentIds ?? [])].sort()) === JSON.stringify([...(next.sourceDocumentIds ?? [])].sort())
+  return unchanged && sameSources ? { balanceAsOf: previous.balanceAsOf, reconciledAt: previous.reconciledAt } : {}
+}
+
+function preserveValidCloses(profile: FinancialProfile, previousSnapshots: Map<string, MonthlySnapshot>, snapshots: MonthlySnapshot[]) {
+  return snapshots.map((snapshot) => {
+    const openSnapshot = { ...snapshot }
+    delete openSnapshot.balanceAsOf
+    delete openSnapshot.reconciledAt
+    if (profile.importedDocuments.some(
+      (document) => documentNeedsReconciliation(document) && pendingDocumentAffectsMonth(profile, document, snapshot.month),
+    )) return openSnapshot
+    return { ...openSnapshot, ...preservedClose(previousSnapshots.get(snapshot.month), openSnapshot) }
+  })
 }
 
 /**
@@ -125,23 +197,29 @@ export function recalculateLatestSnapshot(profile: FinancialProfile, asOfDate: s
     const latestTransactionMonth = [...byMonth.keys()].sort().at(-1)
     const monthlySnapshots = [...byMonth.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([snapshotMonth, values]) => ({
-        month: snapshotMonth,
-        income: values.income,
-        expenses: values.expenses,
-        debtPayments: values.debtPayments,
-        savings: values.income - values.expenses - values.debtPayments,
-        netWorth: previousSnapshots.get(snapshotMonth)?.netWorth ?? (snapshotMonth === latestTransactionMonth ? netWorth : 0),
-        liquidCash: previousSnapshots.get(snapshotMonth)?.liquidCash,
-        debtBalance: previousSnapshots.get(snapshotMonth)?.debtBalance,
-        debtMinimumPayments: previousSnapshots.get(snapshotMonth)?.debtMinimumPayments,
-        cardBalance: previousSnapshots.get(snapshotMonth)?.cardBalance,
-        cardLimit: previousSnapshots.get(snapshotMonth)?.cardLimit,
-        sourceDocumentIds: previousSnapshots.get(snapshotMonth)?.sourceDocumentIds,
-      }))
+      .map(([snapshotMonth, values]) => {
+        const previous = previousSnapshots.get(snapshotMonth)
+        const next = {
+          income: values.income,
+          expenses: values.expenses,
+          debtPayments: values.debtPayments,
+          savings: values.income - values.expenses - values.debtPayments,
+          netWorth: snapshotMonth === latestTransactionMonth ? netWorth : (previous?.netWorth ?? 0),
+        }
+        return {
+          month: snapshotMonth,
+          ...next,
+          liquidCash: previous?.liquidCash,
+          debtBalance: previous?.debtBalance,
+          debtMinimumPayments: previous?.debtMinimumPayments,
+          cardBalance: previous?.cardBalance,
+          cardLimit: previous?.cardLimit,
+          sourceDocumentIds: previous?.sourceDocumentIds,
+        }
+      })
     return {
       ...profile,
-      monthlySnapshots: enrichSnapshotsWithDocumentPositions(profile, monthlySnapshots),
+      monthlySnapshots: preserveValidCloses(profile, previousSnapshots, enrichSnapshotsWithDocumentPositions(profile, monthlySnapshots)),
     }
   }
 
@@ -184,8 +262,12 @@ export function recalculateLatestSnapshot(profile: FinancialProfile, asOfDate: s
   const snapshots = profile.monthlySnapshots.filter((row) => row.month !== month)
   return {
     ...profile,
-    grossMonthlyIncome: Math.max(profile.grossMonthlyIncome, income),
-    netMonthlyIncome: Math.max(profile.netMonthlyIncome, income),
-    monthlySnapshots: enrichSnapshotsWithDocumentPositions(profile, [...snapshots, nextSnapshot].sort((a, b) => a.month.localeCompare(b.month))),
+    grossMonthlyIncome: income > 0 ? income : profile.grossMonthlyIncome,
+    netMonthlyIncome: income > 0 ? income : profile.netMonthlyIncome,
+    monthlySnapshots: preserveValidCloses(
+      profile,
+      new Map(profile.monthlySnapshots.map((row) => [row.month, row])),
+      enrichSnapshotsWithDocumentPositions(profile, [...snapshots, nextSnapshot].sort((a, b) => a.month.localeCompare(b.month))),
+    ),
   }
 }

@@ -21,12 +21,19 @@ data
 
 # Test artifacts
 .playwright
+.playwright-cli/
 playwright-report
 test-results
+
+# Generated artifacts
+output/
+tmp/
 
 # Local analysis artifacts
 .gitnexus/
 reports/*.png
+graphify-out/
+.graphify-venv/
 
 # Editor directories and files
 .vscode/*

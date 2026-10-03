@@ -9,9 +9,10 @@ import {
   Target,
   Upload,
 } from 'lucide-react'
-import { lazy, Suspense } from 'react'
+import { Component, lazy, Suspense, useEffect, useRef, type ErrorInfo, type ReactNode } from 'react'
 import type { FinancialMetrics } from '../../domain/finance'
 import type { FinancialProfile } from '../../domain/types'
+import type { ReviewedDocumentFields } from '../../lib/importers'
 import type { GoalFormState } from '../goals/goalFormModel'
 import { CreateProfileDialog, type CreateProfileMode } from '../profiles/CreateProfileDialog'
 import { ActiveProfileBar, EmptyProfilesState, ProfileSwitcher } from '../profiles/ProfileManagement'
@@ -23,6 +24,35 @@ const Imports = lazy(() => import('../imports/Imports').then(({ Imports: Compone
 const KnowledgeMatrix = lazy(() => import('../knowledge/KnowledgeMatrix').then(({ KnowledgeMatrix: Component }) => ({ default: Component })))
 const Planning = lazy(() => import('../planning/Planning').then(({ Planning: Component }) => ({ default: Component })))
 const PrivacyPanel = lazy(() => import('../privacy/PrivacyPanel').then(({ PrivacyPanel: Component }) => ({ default: Component })))
+
+class SectionErrorBoundary extends Component<
+  { children: ReactNode; onBackToProfiles: () => void },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('No se pudo renderizar el área activa.', error, info)
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children
+    return (
+      <section className="panel wide" role="alert">
+        <h2>No se pudo cargar esta área</h2>
+        <p>Recarga la aplicación o vuelve a tus perfiles para continuar.</p>
+        <div className="empty-actions">
+          <button type="button" className="action-button" onClick={() => window.location.reload()}>Reintentar</button>
+          <button type="button" className="ghost" onClick={this.props.onBackToProfiles}>Volver a perfiles</button>
+        </div>
+      </section>
+    )
+  }
+}
 
 export type AppTab = 'profiles' | 'dashboard' | 'capture' | 'planning' | 'imports' | 'knowledge' | 'privacy' | 'more'
 
@@ -158,51 +188,22 @@ export function EmptyWorkspace({
   )
 }
 
-export function MainAppShell({
-  activeTab,
-  canResetProfile,
-  profiles,
-  currentProfile,
-  metrics,
-  asOfDate,
-  reportingPeriod,
-  creation,
-  pendingDeleteProfileId,
-  pendingDeleteAllProfiles,
-  profileMessage,
-  importMessage,
-  isImporting,
-  importQueue,
-  onSwitchTab,
-  onProfileChange,
-  onOpenCreateProfile,
-  onOpenDashboardForProfile,
-  onRestoreExamples,
-  onResetProfile,
-  onDeleteProfile,
-  onDeleteAllProfiles,
-  onUpdateProfile,
-  onFiles,
-  onReanalyzePersistedDocuments,
-  onApplyReviewedDocumentMovements,
-  onCreateGoalFromPlanning,
-  onReportingPeriodChange,
-}: {
+export interface ShellNavigationState {
   activeTab: AppTab
+  asOfDate: string
+  reportingPeriod: string
+  onSwitchTab: (tab: AppTab) => void
+  onReportingPeriodChange: (period: string) => void
+}
+
+export interface ShellProfileState {
   canResetProfile: boolean
   profiles: FinancialProfile[]
   currentProfile: FinancialProfile
-  metrics: FinancialMetrics
-  asOfDate: string
-  reportingPeriod: string
   creation: ProfileCreationState
   pendingDeleteProfileId: string
   pendingDeleteAllProfiles: boolean
   profileMessage: string
-  importMessage: string
-  isImporting: boolean
-  importQueue: string[]
-  onSwitchTab: (tab: AppTab) => void
   onProfileChange: (id: string, targetTab?: 'dashboard') => void
   onOpenCreateProfile: (mode?: CreateProfileMode) => void
   onOpenDashboardForProfile: (id?: string) => void
@@ -210,14 +211,72 @@ export function MainAppShell({
   onResetProfile: () => void
   onDeleteProfile: (id: string) => void
   onDeleteAllProfiles: () => void
-  onUpdateProfile: (profile: FinancialProfile) => void
+  onUpdateProfile: (profile: FinancialProfile) => Promise<void>
+  onCloseReportingPeriod: (balanceAsOf: string) => Promise<void>
+  onCreateGoalFromPlanning: () => void
+}
+
+export interface ShellDocumentState {
+  canUndoLatestImport: boolean
+  importMessage: string
+  isImporting: boolean
+  importQueue: string[]
   onFiles: (files: File[], mode: 'current' | 'new') => void
   onReanalyzePersistedDocuments: () => void
-  onApplyReviewedDocumentMovements: (documentId: string) => void
-  onCreateGoalFromPlanning: () => void
-  onReportingPeriodChange: (period: string) => void
-}) {
+  onApplyReviewedDocumentMovements: (documentId: string, fields?: ReviewedDocumentFields) => void
+  onUndoLatestImport: () => Promise<void>
+}
+
+interface MainAppShellProps {
+  navigation: ShellNavigationState
+  profile: ShellProfileState
+  documents: ShellDocumentState
+  metrics: FinancialMetrics
+}
+
+export function MainAppShell({ navigation, profile, documents, metrics }: MainAppShellProps) {
+  const { activeTab, asOfDate, reportingPeriod, onReportingPeriodChange, onSwitchTab } = navigation
+  const {
+    canResetProfile,
+    creation,
+    currentProfile,
+    onCreateGoalFromPlanning,
+    onDeleteAllProfiles,
+    onDeleteProfile,
+    onOpenCreateProfile,
+    onOpenDashboardForProfile,
+    onCloseReportingPeriod,
+    onProfileChange,
+    onResetProfile,
+    onRestoreExamples,
+    onUpdateProfile,
+    pendingDeleteAllProfiles,
+    pendingDeleteProfileId,
+    profileMessage,
+    profiles,
+  } = profile
+  const {
+    importMessage,
+    importQueue,
+    isImporting,
+    onApplyReviewedDocumentMovements,
+    onFiles,
+    onReanalyzePersistedDocuments,
+    canUndoLatestImport,
+    onUndoLatestImport,
+  } = documents
+
   const section = sectionCopy[activeTab]
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const previousTabRef = useRef(activeTab)
+  useEffect(() => {
+    if (previousTabRef.current !== activeTab) headingRef.current?.focus()
+    previousTabRef.current = activeTab
+  }, [activeTab])
+  const workspaceMessageIsAlert = /otra pestana|recarga el perfil|excede el limite de persistencia/i.test(profileMessage)
+  const showWorkspaceMessage =
+    activeTab !== 'profiles' && activeTab !== 'capture' &&
+    (profileMessage === 'Datos de ejemplo restaurados para este espacio.' || workspaceMessageIsAlert)
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Navegacion principal">
@@ -278,7 +337,7 @@ export function MainAppShell({
         <header className="topbar">
           <div>
             <p className="eyebrow">{activeTab === 'profiles' ? 'Organización financiera' : profileDisplayName(currentProfile, profiles)}</p>
-            <h1>{section.title}</h1>
+            <h1 ref={headingRef} tabIndex={-1}>{section.title}</h1>
             <p>{section.description}</p>
           </div>
           <div className="topbar-actions">
@@ -309,8 +368,8 @@ export function MainAppShell({
           </div>
         </header>
 
-        {activeTab !== 'profiles' && profileMessage === 'Datos de ejemplo restaurados para este espacio.' && (
-          <p className="workspace-message" aria-live="polite">{profileMessage}</p>
+        {showWorkspaceMessage && (
+          <p className="workspace-message" role={workspaceMessageIsAlert ? 'alert' : 'status'}>{profileMessage}</p>
         )}
 
         {activeTab === 'profiles' ? (
@@ -343,6 +402,7 @@ export function MainAppShell({
 
         <ProfileCreationSlot creation={creation} />
 
+        <SectionErrorBoundary key={`${currentProfile.id}:${activeTab}`} onBackToProfiles={() => onSwitchTab('profiles')}>
         <Suspense fallback={<section className="panel loading-panel" role="status">Cargando vista...</section>}>
           {activeTab === 'dashboard' && (
             <Dashboard
@@ -350,12 +410,13 @@ export function MainAppShell({
               metrics={metrics}
               reportingPeriod={reportingPeriod}
               onReportingPeriodChange={onReportingPeriodChange}
+              onCloseReportingPeriod={onCloseReportingPeriod}
               onStartCapture={() => onSwitchTab('capture')}
               onCreateFromDocuments={() => onSwitchTab('imports')}
               onOpenPlanning={() => onSwitchTab('planning')}
             />
           )}
-          {activeTab === 'capture' && <Capture profile={currentProfile} asOfDate={asOfDate} onChange={onUpdateProfile} />}
+          {activeTab === 'capture' && <Capture key={currentProfile.id} profile={currentProfile} asOfDate={asOfDate} onChange={onUpdateProfile} />}
           {activeTab === 'planning' && <Planning profile={currentProfile} metrics={metrics} onCreateGoal={onCreateGoalFromPlanning} />}
           {activeTab === 'imports' && (
             <Imports
@@ -366,6 +427,8 @@ export function MainAppShell({
               onFiles={onFiles}
               onReanalyzePersistedDocuments={onReanalyzePersistedDocuments}
               onApplyReviewedDocumentMovements={onApplyReviewedDocumentMovements}
+              canUndoLatestImport={canUndoLatestImport}
+              onUndoLatestImport={onUndoLatestImport}
             />
           )}
           {activeTab === 'more' && (
@@ -390,6 +453,7 @@ export function MainAppShell({
           {activeTab === 'knowledge' && <KnowledgeMatrix />}
           {activeTab === 'privacy' && <PrivacyPanel />}
         </Suspense>
+        </SectionErrorBoundary>
       </section>
     </main>
   )

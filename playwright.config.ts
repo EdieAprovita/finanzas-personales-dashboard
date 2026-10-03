@@ -42,13 +42,13 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `FINANZAS_API_PORT=${apiPort} FINANZAS_DB_PATH=.playwright/finanzas-e2e.sqlite npm run api`,
+      command: `FINANZAS_API_TOKEN=synthetic-playwright-access-token-0001 FINANZAS_API_PORT=${apiPort} FINANZAS_DB_PATH=.playwright/finanzas-e2e.sqlite npm run api`,
       url: `${apiUrl}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,
     },
     {
-      command: `FINANZAS_API_URL=${apiUrl} npm run dev -- --host 127.0.0.1 --port ${webPort}`,
+      command: `FINANZAS_API_URL=${apiUrl} node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${webPort}`,
       url: webUrl,
       reuseExistingServer: false,
       timeout: 30_000,
