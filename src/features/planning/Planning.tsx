@@ -3,6 +3,9 @@ import { mxn, pct, type FinancialMetrics } from '../../domain/finance'
 import { statusLabel } from '../../domain/status'
 import type { FinancialProfile } from '../../domain/types'
 import { goalIcons, goalTypeLabels } from '../goals/goalFormModel'
+import { BalanceSheet } from './BalanceSheet'
+import { DebtSimulator } from './DebtSimulator'
+import { InvestmentProfileInterview } from './InvestmentProfileInterview'
 
 export function Planning({
   profile,
@@ -22,7 +25,8 @@ export function Planning({
     .sort((left, right) => left - right)
   const scenario = (percentile: number): number => historicalSavings[Math.floor((historicalSavings.length - 1) * percentile)] ?? 0
   return (
-    <section className="panel wide">
+    <>
+      <section className="panel wide">
       <div className="panel-heading">
         <div>
           <h2>Metas y planeacion</h2>
@@ -141,6 +145,10 @@ export function Planning({
           )}
         </div>
       )}
-    </section>
+      </section>
+      <BalanceSheet profile={profile} />
+      <DebtSimulator />
+      <InvestmentProfileInterview />
+    </>
   )
 }

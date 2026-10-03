@@ -24,8 +24,13 @@ export function PrivacyPanel() {
         </article>
         <article>
           <AlertTriangle size={22} />
-          <h3>Protección pendiente</h3>
-          <p>Antes de usar datos reales de forma continua, activa cifrado fuerte y backups cifrados.</p>
+          <h3>Backups cifrados</h3>
+          <p>La herramienta local crea y valida copias cifradas. Conserva la clave y una copia en ubicaciones separadas.</p>
+        </article>
+        <article>
+          <AlertTriangle size={22} />
+          <h3>Cifrado pendiente</h3>
+          <p>La base activa todavía no tiene cifrado propio; protege también el disco y la cuenta del sistema.</p>
         </article>
       </div>
     </section>
