@@ -1,3 +1,4 @@
+import { documentNeedsReconciliation } from '../../domain/documentReconciliation'
 import type { DocumentKind, FinancialProfile, ImportedDocument } from '../../domain/types'
 import { documentFieldLabel, documentKindLabels, documentSubtypeForExtracted, expectedFieldSpecsForExtracted } from '../../lib/documentFieldSpecs'
 
@@ -180,6 +181,10 @@ function currentSchemaDocument(doc: ImportedDocument) {
   return numericExtracted(doc, 'expectedFields') > 0 || numericExtracted(doc, 'qualitySchemaVersion') > 0
 }
 
+function hasPersistedRawFile(doc: ImportedDocument) {
+  return doc.extracted?.rawFilePersisted === true && doc.extracted?.sourceBlobStatus === 'available'
+}
+
 function qualityScoreFromCompleteness(completeness: number, hasAppliedRows: boolean) {
   const base = Math.max(0, Math.min(1, completeness))
   return Number(Math.min(1, base * 0.85 + (hasAppliedRows ? 0.15 : 0.05)).toFixed(2))
@@ -303,15 +308,16 @@ function analyzeCaptureReadiness(documents: ImportedDocument[]): DocumentCapture
   const legacyDocuments = documents.filter((doc) => !currentSchemaDocument(doc) && expectedFieldSpecsForExtracted(doc.kind ?? 'unknown', doc.extracted ?? {}).length > 0).length
   const currentSchemaDocuments = documents.filter(currentSchemaDocument).length
   const incompleteDocuments = documents.filter((doc) => documentQualitySummary(doc).status === 'incomplete').length
+  const rawFilesPersisted = documents.length > 0 && documents.every(hasPersistedRawFile)
   const reimportRecommended = legacyDocuments
   const headline = legacyDocuments
-    ? `${legacyDocuments} documento(s) fueron importados antes del esquema de calidad actual y requieren volver a subir el archivo original.`
+    ? `${legacyDocuments} documento(s) fueron importados antes del esquema de calidad actual y requieren volver a subir el archivo original${rawFilesPersisted ? '' : ' porque no se conserva una copia local'}.`
     : incompleteDocuments
       ? `${incompleteDocuments} documento(s) tienen campos incompletos; revisa la fuente o agrega un documento compatible.`
       : 'Los documentos importados tienen metadata de calidad actual.'
 
   return {
-    rawFilesPersisted: false,
+    rawFilesPersisted,
     currentSchemaDocuments,
     legacyDocuments,
     incompleteDocuments,
@@ -441,15 +447,7 @@ function analyzeDocumentRisk(profile: FinancialProfile): DocumentRiskProfile {
   const skippedDuplicateRows = documents.reduce((sum, doc) => sum + numericExtracted(doc, 'skippedDuplicateRows'), 0)
   const skippedSemanticDuplicates = documents.reduce((sum, doc) => sum + numericExtracted(doc, 'skippedSemanticDuplicates'), 0)
   const warningDocuments = documents.filter((doc) => (doc.warnings?.length ?? 0) > 0).length
-  const pendingReconciliation = documents.filter(
-    (doc) =>
-      doc.status === 'needs_review' ||
-      booleanExtracted(doc, 'balancePendingReview') ||
-      numericExtracted(doc, 'skippedRows') > 0 ||
-      numericExtracted(doc, 'unparsedDates') > 0 ||
-      (doc.kind === 'credit_card_statement' && ['mismatch', 'insufficient'].includes(stringExtracted(doc, 'cardReconciliationStatus'))) ||
-      (doc.warnings ?? []).some((warning) => /concili|duplica|revision|pendiente|omit/i.test(warning)),
-  ).length
+  const pendingReconciliation = documents.filter(documentNeedsReconciliation).length
   const duplicateDocumentIds = countDuplicates(documents.map((doc) => doc.id))
   const duplicateTransactionFingerprints = countDuplicates(transactionFingerprint(profile))
   const headline =
@@ -590,7 +588,7 @@ export function reanalyzePersistedDocuments(profile: FinancialProfile): Persiste
       reanalysis: {
         analyzedAt,
         method: 'persisted-extracted-metadata',
-        rawFilesPersisted: false,
+        rawFilesPersisted: hasPersistedRawFile(doc),
         previousStatus: before.status,
         previousQualitySchemaVersion: numericExtracted(doc, 'qualitySchemaVersion'),
       },

@@ -6,7 +6,7 @@ vi.mock('pdfjs-dist', () => ({
 }))
 
 import { calculateMetrics } from './finance'
-import { applyReviewedStatementMovements } from '../lib/importers'
+import { applyReviewedDocument, applyReviewedStatementMovements } from '../lib/importers'
 import { recalculateLatestSnapshot } from './snapshots'
 import type { FinancialProfile } from './types'
 
@@ -264,6 +264,26 @@ describe('recalculateLatestSnapshot', () => {
     expect(recalculated.monthlySnapshots).toHaveLength(1)
   })
 
+  it('allows a lower observed income while preserving the previous month', () => {
+    const original = profile({
+      transactions: [
+        { id: 'june-income', date: '2026-06-01', amount: 10000, merchant: 'Nomina junio', category: 'Ingreso', accountId: 'cash', type: 'income' },
+        { id: 'july-income', date: '2026-07-01', amount: 7000, merchant: 'Nomina julio', category: 'Ingreso', accountId: 'cash', type: 'income' },
+      ],
+    })
+
+    const recalculated = recalculateLatestSnapshot(original, '2026-07-09')
+
+    expect(recalculated.grossMonthlyIncome).toBe(7000)
+    expect(recalculated.netMonthlyIncome).toBe(7000)
+    expect(recalculated.monthlySnapshots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ month: '2026-06', income: 10000 }),
+        expect.objectContaining({ month: '2026-07', income: 7000 }),
+      ]),
+    )
+  })
+
   it('persists dated balances only from processed statements when regenerating transaction snapshots', () => {
     const original = profile({
       transactions: [
@@ -322,6 +342,96 @@ describe('recalculateLatestSnapshot', () => {
 })
 
 describe('applyReviewedStatementMovements', () => {
+  it('applies a payroll PDF after a reviewer confirms its missing payment date', () => {
+    const result = applyReviewedDocument(
+      profile({
+        accounts: [],
+        importedDocuments: [
+          {
+            id: 'payroll-needs-date',
+            fileName: 'nomina.pdf',
+            fileType: 'pdf',
+            importedAt: '2026-07-13T00:00:00.000Z',
+            status: 'needs_review',
+            summary: 'Nomina PDF sin fecha.',
+            extractedRows: 0,
+            kind: 'payroll_cfdi',
+            extracted: { netIncome: 12000 },
+          },
+        ],
+      }),
+      'payroll-needs-date',
+      { paymentDate: '2026-06-15' },
+    )
+
+    expect(result.profile.transactions).toMatchObject([
+      { date: '2026-06-15', amount: 12000, category: 'Nomina', type: 'income' },
+    ])
+    expect(result.document.status).toBe('processed')
+    expect(result.document.extracted?.reviewedFieldsApproval).toBe('manual_user_action')
+  })
+
+  it('applies a reviewed card balance without creating card-consumption movements', () => {
+    const result = applyReviewedDocument(
+      profile({
+        importedDocuments: [
+          {
+            id: 'card-summary',
+            fileName: 'tarjeta.pdf',
+            fileType: 'pdf',
+            importedAt: '2026-07-13T00:00:00.000Z',
+            status: 'needs_review',
+            summary: 'Tarjeta sin filas de actividad.',
+            extractedRows: 0,
+            kind: 'credit_card_statement',
+            extracted: { cardReconciliationStatus: 'mismatch' },
+          },
+        ],
+      }),
+      'card-summary',
+      { currentBalance: 2400, creditLimit: 8000, minimumPayment: 400, noInterestPayment: 2400 },
+    )
+
+    expect(result.profile.transactions).toHaveLength(0)
+    expect(result.profile.accounts).toContainEqual(expect.objectContaining({ type: 'credit_card', balance: -2400, creditLimit: 8000 }))
+    expect(result.profile.debts).toContainEqual(expect.objectContaining({ balance: 2400, minimumPayment: 400, paymentToAvoidInterest: 2400 }))
+    expect(result.document.status).toBe('processed')
+  })
+
+  it('reconciles reviewed card fields before applying corrected movement rows', () => {
+    const result = applyReviewedDocument(
+      profile({
+        importedDocuments: [
+          {
+            id: 'card-corrected-rows',
+            fileName: 'tarjeta.pdf',
+            fileType: 'pdf',
+            importedAt: '2026-07-13T00:00:00.000Z',
+            status: 'needs_review',
+            summary: 'Tarjeta con diferencia de conciliación.',
+            extractedRows: 1,
+            kind: 'credit_card_statement',
+            extracted: {
+              previousBalance: 100,
+              newCharges: 50,
+              paymentsAmount: 0,
+              currentBalance: 99,
+              cardReconciliationStatus: 'mismatch',
+              cardMovementRows: [{ date: '2026-06-15', description: 'Compra', charge: 50 }],
+            },
+          },
+        ],
+      }),
+      'card-corrected-rows',
+      { currentBalance: 150 },
+    )
+
+    expect(result.document.extracted?.cardReconciliationStatus).toBe('balanced')
+    expect(result.document.extracted?.cardReconciliationDifference).toBe(0)
+    expect(result.document.extracted?.reviewedMovementRowsApplied).toBe(1)
+    expect(result.profile.transactions).toMatchObject([{ amount: -50, type: 'expense' }])
+  })
+
   it('applies a reviewed payroll PDF only with a detected payment date and net income', () => {
     const result = applyReviewedStatementMovements(
       profile({

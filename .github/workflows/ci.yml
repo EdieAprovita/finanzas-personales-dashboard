@@ -73,6 +73,9 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      - name: API tests
+        run: npm run test:api
+
       - name: Validate knowledge seed
         run: npm run test:knowledge
 
@@ -80,6 +83,9 @@ jobs:
         env:
           PYTHON: python
         run: npm run test:imports
+
+      - name: Validate SQLite schema
+        run: npm run test:db
 
       - name: Build production bundle
         run: npm run build

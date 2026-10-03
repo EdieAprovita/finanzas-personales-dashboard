@@ -52,7 +52,7 @@ function reverseManualTransaction(profile: FinancialProfile, transaction: Transa
   return { ...profile, accounts, debts, transactions: profile.transactions.filter((row) => row.id !== transaction.id) }
 }
 
-export function Capture({ profile, asOfDate, onChange }: { profile: FinancialProfile; asOfDate: string; onChange: (profile: FinancialProfile) => void }) {
+export function Capture({ profile, asOfDate, onChange }: { profile: FinancialProfile; asOfDate: string; onChange: (profile: FinancialProfile) => Promise<void> }) {
   const [account, setAccount] = useState<AccountForm>(() => emptyAccountForm(asOfDate))
   const [editingAccountId, setEditingAccountId] = useState('')
   const [transaction, setTransaction] = useState({
@@ -68,26 +68,37 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
   const [goal, setGoal] = useState<GoalFormState>(() => defaultGoalForm(profile.goals.length ? 'savings' : 'emergency', asOfDate))
   const [editingGoalId, setEditingGoalId] = useState('')
   const [goalError, setGoalError] = useState('')
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState<{ text: string; role: 'alert' | 'status' }>({ text: '', role: 'status' })
   const [pendingDeletion, setPendingDeletion] = useState<{ type: 'account' | 'transaction' | 'goal'; id: string } | null>(null)
 
   const paymentAccounts = profile.accounts.filter((row) => !isDebtAccount(row.type))
+
+  async function persistChange(nextProfile: FinancialProfile, successMessage: string): Promise<boolean> {
+    try {
+      await onChange(nextProfile)
+      setMessage({ text: successMessage, role: 'status' })
+      return true
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : 'No se pudo guardar el cambio.', role: 'alert' })
+      return false
+    }
+  }
 
   function resetAccountForm(): void {
     setAccount(emptyAccountForm(asOfDate))
     setEditingAccountId('')
   }
 
-  function addAccount(): void {
+  async function addAccount(): Promise<void> {
     const balance = Number(account.balance)
     const creditLimit = account.creditLimit ? Number(account.creditLimit) : undefined
     const minimumPayment = account.minimumPayment ? Number(account.minimumPayment) : 0
     if (!account.name.trim() || !Number.isFinite(balance) || balance < 0 || (creditLimit !== undefined && (!Number.isFinite(creditLimit) || creditLimit < 0))) {
-      setMessage('Revisa nombre, saldo y limite antes de guardar la cuenta.')
+      setMessage({ text: 'Revisa nombre, saldo y limite antes de guardar la cuenta.', role: 'alert' })
       return
     }
     if (isDebtAccount(account.type) && (!Number.isFinite(minimumPayment) || minimumPayment < 0 || !account.dueDate)) {
-      setMessage('Captura el pago minimo y la fecha limite de la deuda.')
+      setMessage({ text: 'Captura el pago minimo y la fecha limite de la deuda.', role: 'alert' })
       return
     }
     const accountId = editingAccountId || `account-${Date.now()}`
@@ -118,21 +129,21 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
           },
         ]
       : profile.debts.filter((debt) => debt.accountId !== accountId)
-    onChange({ ...profile, accounts, debts })
-    setMessage(editingAccountId ? 'Cuenta actualizada.' : 'Cuenta agregada.')
+    const saved = await persistChange({ ...profile, accounts, debts }, editingAccountId ? 'Cuenta actualizada.' : 'Cuenta agregada.')
+    if (!saved) return
     resetAccountForm()
   }
 
-  function addTransaction(): void {
+  async function addTransaction(): Promise<void> {
     const amount = Math.abs(Number(transaction.amount))
     const sourceAccount = profile.accounts.find((row) => row.id === transaction.accountId)
     const debt = profile.debts.find((row) => row.id === transaction.debtId)
     if (!sourceAccount || !transaction.merchant.trim() || !Number.isFinite(amount) || amount <= 0) {
-      setMessage('Selecciona una cuenta y captura monto y concepto validos.')
+      setMessage({ text: 'Selecciona una cuenta y captura monto y concepto validos.', role: 'alert' })
       return
     }
     if (transaction.type === 'debt_payment' && (!debt || isDebtAccount(sourceAccount.type))) {
-      setMessage('El pago de deuda requiere una cuenta de origen y una deuda destino.')
+      setMessage({ text: 'El pago de deuda requiere una cuenta de origen y una deuda destino.', role: 'alert' })
       return
     }
     const previousTransaction = profile.transactions.find((row) => row.id === editingTransactionId)
@@ -163,13 +174,16 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
       }
       return row
     })
-    onChange({ ...baseProfile, accounts, debts, transactions: [nextTransaction, ...baseProfile.transactions] })
-    setMessage(editingTransactionId ? 'Movimiento actualizado.' : 'Movimiento guardado.')
+    const saved = await persistChange(
+      { ...baseProfile, accounts, debts, transactions: [nextTransaction, ...baseProfile.transactions] },
+      editingTransactionId ? 'Movimiento actualizado.' : 'Movimiento guardado.',
+    )
+    if (!saved) return
     setEditingTransactionId('')
     setTransaction({ date: asOfDate, amount: '', merchant: '', category: 'Supermercado', accountId: paymentAccounts[0]?.id ?? '', debtId: profile.debts[0]?.id ?? '', type: 'expense' })
   }
 
-  function saveGoal(): void {
+  async function saveGoal(): Promise<void> {
     const validationError = validateGoalForm(goal, asOfDate)
     if (validationError) {
       setGoalError(validationError)
@@ -178,9 +192,12 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
     const nextGoal = goalFormToGoal(goal, new Date().toISOString())
     const savedGoal: Goal = editingGoalId ? { ...nextGoal, id: editingGoalId } : nextGoal
     const goals = editingGoalId ? profile.goals.map((row) => (row.id === editingGoalId ? savedGoal : row)) : [savedGoal, ...profile.goals]
-    onChange({ ...profile, goals })
     const estimate = goalFormEstimate(goal, asOfDate)
-    setMessage(estimate ? `${savedGoal.name} requiere aproximadamente ${mxn(estimate.requiredMonthly)} al mes.` : `${savedGoal.name} guardada.`)
+    const saved = await persistChange(
+      { ...profile, goals },
+      estimate ? `${savedGoal.name} requiere aproximadamente ${mxn(estimate.requiredMonthly)} al mes.` : `${savedGoal.name} guardada.`,
+    )
+    if (!saved) return
     setGoal(defaultGoalForm('savings', asOfDate))
     setEditingGoalId('')
     setGoalError('')
@@ -190,19 +207,18 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
     if (!row.isManual) return
     setEditingTransactionId(row.id)
     setTransaction({ date: row.date, amount: String(Math.abs(row.amount)), merchant: row.merchant, category: row.category, accountId: row.accountId, debtId: row.debtId ?? '', type: row.type })
-    setMessage('Editando movimiento manual.')
+    setMessage({ text: 'Editando movimiento manual.', role: 'status' })
   }
 
-  function removeTransaction(row: Transaction): void {
+  async function removeTransaction(row: Transaction): Promise<void> {
     if (!row.isManual) return
     if (pendingDeletion?.type !== 'transaction' || pendingDeletion.id !== row.id) {
       setPendingDeletion({ type: 'transaction', id: row.id })
-      setMessage(`Vuelve a tocar eliminar para confirmar que deseas borrar ${row.merchant}.`)
+      setMessage({ text: `Vuelve a tocar eliminar para confirmar que deseas borrar ${row.merchant}.`, role: 'alert' })
       return
     }
-    onChange(reverseManualTransaction(profile, row))
+    if (!(await persistChange(reverseManualTransaction(profile, row), 'Movimiento manual eliminado.'))) return
     setPendingDeletion(null)
-    setMessage('Movimiento manual eliminado.')
   }
 
   function editAccount(row: Account): void {
@@ -218,31 +234,32 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
     })
   }
 
-  function removeAccount(row: Account): void {
+  async function removeAccount(row: Account): Promise<void> {
     const linkedDebtIds = new Set(profile.debts.filter((debt) => debt.accountId === row.id).map((debt) => debt.id))
     if (profile.transactions.some((transactionRow) => transactionRow.accountId === row.id || (transactionRow.debtId && linkedDebtIds.has(transactionRow.debtId)))) {
-      setMessage('No puedes eliminar una cuenta con movimientos. Elimina o corrige sus movimientos primero.')
+      setMessage({ text: 'No puedes eliminar una cuenta con movimientos. Elimina o corrige sus movimientos primero.', role: 'alert' })
       return
     }
     if (pendingDeletion?.type !== 'account' || pendingDeletion.id !== row.id) {
       setPendingDeletion({ type: 'account', id: row.id })
-      setMessage(`Vuelve a tocar eliminar para confirmar que deseas borrar ${row.name}.`)
+      setMessage({ text: `Vuelve a tocar eliminar para confirmar que deseas borrar ${row.name}.`, role: 'alert' })
       return
     }
-    onChange({ ...profile, accounts: profile.accounts.filter((candidate) => candidate.id !== row.id), debts: profile.debts.filter((debt) => debt.accountId !== row.id) })
+    if (!(await persistChange(
+      { ...profile, accounts: profile.accounts.filter((candidate) => candidate.id !== row.id), debts: profile.debts.filter((debt) => debt.accountId !== row.id) },
+      'Cuenta eliminada.',
+    ))) return
     setPendingDeletion(null)
-    setMessage('Cuenta eliminada.')
   }
 
-  function removeGoal(row: Goal): void {
+  async function removeGoal(row: Goal): Promise<void> {
     if (pendingDeletion?.type !== 'goal' || pendingDeletion.id !== row.id) {
       setPendingDeletion({ type: 'goal', id: row.id })
-      setMessage(`Vuelve a tocar eliminar para confirmar que deseas borrar la meta ${row.name}.`)
+      setMessage({ text: `Vuelve a tocar eliminar para confirmar que deseas borrar la meta ${row.name}.`, role: 'alert' })
       return
     }
-    onChange({ ...profile, goals: profile.goals.filter((goalRow) => goalRow.id !== row.id) })
+    if (!(await persistChange({ ...profile, goals: profile.goals.filter((goalRow) => goalRow.id !== row.id) }, 'Meta eliminada.'))) return
     setPendingDeletion(null)
-    setMessage('Meta eliminada.')
   }
 
   function editGoal(row: Goal): void {
@@ -271,6 +288,7 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
         <button type="button" onClick={() => scrollToCaptureTask('capture-goal')}><Target size={15} /> Meta</button>
         <button type="button" onClick={() => scrollToCaptureTask('capture-history')}><Pencil size={15} /> Revisar</button>
       </nav>
+      {message.text && <p className="profile-message" role={message.role} aria-live={message.role === 'alert' ? 'assertive' : 'polite'}>{message.text}</p>}
       <div className="capture-grid">
       <section id="capture-account" className="panel capture-card">
         <div className="panel-heading">
@@ -282,7 +300,7 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
         </div>
         <div className="form-grid">
           <label>Nombre<input value={account.name} onChange={(event) => setAccount({ ...account, name: event.target.value })} placeholder="Cuenta nómina" /></label>
-          <label>Tipo<select value={account.type} onChange={(event) => setAccount({ ...account, type: event.target.value as AccountType })}><option value="checking">Cuenta corriente</option><option value="savings">Ahorro</option><option value="investment">Inversión</option><option value="retirement">Retiro</option><option value="credit_card">Tarjeta de crédito</option><option value="loan">Crédito</option><option value="property">Inmueble</option><option value="vehicle">Vehículo</option></select></label>
+          <label>Tipo<select value={account.type} onChange={(event) => setAccount({ ...account, type: event.target.value as AccountType })}><option value="checking">Cuenta corriente</option><option value="savings">Ahorro</option><option value="investment">Inversión</option><option value="retirement">Retiro</option><option value="credit_card">Tarjeta de crédito</option><option value="loan">Crédito</option><option value="property">Inmueble</option><option value="vehicle">Vehículo</option><option value="receivable">Cuenta por cobrar</option><option value="business">Negocio o participación</option><option value="other_asset">Otro activo</option></select></label>
           <label>{isDebtAccount(account.type) ? 'Saldo adeudado' : 'Saldo actual'}<input inputMode="decimal" value={account.balance} onChange={(event) => setAccount({ ...account, balance: event.target.value })} placeholder="25000" /></label>
           <label>Límite de crédito<input inputMode="decimal" value={account.creditLimit} onChange={(event) => setAccount({ ...account, creditLimit: event.target.value })} placeholder="Opcional" /></label>
           {isDebtAccount(account.type) && <label>Pago mínimo<input inputMode="decimal" value={account.minimumPayment} onChange={(event) => setAccount({ ...account, minimumPayment: event.target.value })} placeholder="1500" /></label>}
@@ -317,7 +335,6 @@ export function Capture({ profile, asOfDate, onChange }: { profile: FinancialPro
 
       <section id="capture-history" className="panel wide recent-ledger">
         <div className="panel-heading"><div><h2>Datos recientes</h2><p>Edita o elimina los registros manuales antes de confiar en el dashboard.</p></div></div>
-        {message && <p className="profile-message" role="status" aria-live="polite">{message}</p>}
         <div className="recent-ledger-grid">
           <article><h3>Cuentas</h3>{profile.accounts.map((row) => { const isPending = pendingDeletion?.type === 'account' && pendingDeletion.id === row.id; return <div key={row.id}><span>{row.name} · {mxn(row.balance)}</span><button type="button" onClick={() => editAccount(row)} aria-label={`Editar ${row.name}`}><Pencil size={15} /></button><button type="button" onClick={() => removeAccount(row)} aria-label={isPending ? `Confirmar eliminar ${row.name}` : `Eliminar ${row.name}`}><Trash2 size={15} /></button></div> })}</article>
           <article><h3>Movimientos manuales</h3>{profile.transactions.filter((row) => row.isManual).slice(0, 8).map((row) => { const isPending = pendingDeletion?.type === 'transaction' && pendingDeletion.id === row.id; return <div key={row.id}><span>{row.date} · {row.merchant} · {mxn(row.amount)}</span><button type="button" onClick={() => editTransaction(row)} aria-label={`Editar ${row.merchant}`}><Pencil size={15} /></button><button type="button" onClick={() => removeTransaction(row)} aria-label={isPending ? `Confirmar eliminar ${row.merchant}` : `Eliminar ${row.merchant}`}><Trash2 size={15} /></button></div> })}</article>

@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { exampleProfiles } from './domain/exampleData'
 import { calculateMetrics } from './domain/finance'
-import { latestReportingPeriod, migrateFinancialProfile } from './domain/profile'
-import { recalculateLatestSnapshot } from './domain/snapshots'
+import { closeMonthlySnapshot, recalculateLatestSnapshot } from './domain/snapshots'
 import { PROFILE_SCHEMA_VERSION, type FinancialProfile } from './domain/types'
 import { defaultGoalForm, goalFormToGoal, validateGoalForm, type GoalFormState } from './features/goals/goalFormModel'
 import type { CreateProfileMode } from './features/profiles/CreateProfileDialog'
 import { enrichImportedProfileName, profileDisplayName } from './features/profiles/profileSummary'
 import { EmptyWorkspace, MainAppShell, type AppTab, type ProfileCreationState } from './features/shell/AppShell'
-import { deleteAllProfiles, deleteProfile, getApiHealth, getProfiles, saveProfile } from './lib/api'
 import { reanalyzePersistedDocuments } from './features/imports/documentQuality'
+import type { ReviewedDocumentFields } from './lib/importers'
+import { useProfileRepository } from './features/profile/useProfileRepository'
+import { setApiAccessToken } from './lib/api'
+import { civilDate, civilMonth } from './lib/civilDate'
 
 function safeImportQueueLabel(file: File, index: number) {
   const extension = file.name.split('.').at(-1)?.toUpperCase().replace(/[^A-Z0-9]/g, '') || 'DOC'
@@ -21,16 +23,50 @@ function safeUserMessage(message: string) {
   return message.replace(/\b[^\s/\\]+\.(pdf|csv|xml|png|jpg|jpeg|webp)\b/gi, 'archivo')
 }
 
+const appTabs: AppTab[] = ['profiles', 'dashboard', 'capture', 'planning', 'imports', 'knowledge', 'privacy', 'more']
+
+function tabFromLocation(): AppTab {
+  const section = new URL(window.location.href).searchParams.get('section')
+  return appTabs.includes(section as AppTab) ? section as AppTab : 'profiles'
+}
+
+function updateTabLocation(tab: AppTab, method: 'pushState' | 'replaceState'): void {
+  const url = new URL(window.location.href)
+  if (tab === 'profiles') url.searchParams.delete('section')
+  else url.searchParams.set('section', tab)
+  const next = `${url.pathname}${url.search}${url.hash}`
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  if (next !== current) window.history[method](null, '', next)
+}
+
 function App() {
-  const asOfDate = new Date().toISOString().slice(0, 10)
-  const [activeProfileId, setActiveProfileId] = useState('')
-  const [profiles, setProfiles] = useState<FinancialProfile[]>([])
-  const [apiStatus, setApiStatus] = useState<'checking' | 'sqlite' | 'blocked'>('checking')
-  const [reportingPeriod, setReportingPeriod] = useState(asOfDate.slice(0, 7))
+  const asOfDate = civilDate()
+  const {
+    activeProfileId,
+    activateProfile,
+    apiStatus,
+    currentProfile,
+    deleteAllStoredProfiles,
+    deleteStoredProfile,
+    loadProfiles,
+    persistProfile,
+    profiles,
+    replaceProfiles,
+    reportingPeriod,
+    selectProfile,
+    setReportingPeriod,
+    undoableImportProfileIds,
+    undoLatestImportForProfile,
+    updateReportingPeriod,
+  } = useProfileRepository(asOfDate)
   const [importMessage, setImportMessage] = useState('')
   const [isImporting, setIsImporting] = useState(false)
   const [importQueue, setImportQueue] = useState<string[]>([])
   const [profileMessage, setProfileMessage] = useState('')
+  const [accessToken, setAccessToken] = useState('')
+  const [accessTokenError, setAccessTokenError] = useState(false)
+  const [isAuthenticating, setIsAuthenticating] = useState(false)
+  const accessTokenRef = useRef<HTMLInputElement>(null)
   const [pendingDeleteProfileId, setPendingDeleteProfileId] = useState('')
   const [pendingDeleteAllProfiles, setPendingDeleteAllProfiles] = useState(false)
   const [isCreateProfileOpen, setIsCreateProfileOpen] = useState(false)
@@ -40,42 +76,38 @@ function App() {
   const [includeStarterGoal, setIncludeStarterGoal] = useState(false)
   const [starterGoal, setStarterGoal] = useState<GoalFormState>(() => defaultGoalForm('savings', asOfDate))
   const [starterGoalError, setStarterGoalError] = useState('')
-  const [activeTab, setActiveTab] = useState<AppTab>('profiles')
+  const [activeTab, setActiveTab] = useState<AppTab>(tabFromLocation)
 
-  const loadProfiles = useCallback(async (): Promise<void> => {
-    try {
-      await getApiHealth()
-      setApiStatus('sqlite')
-      const apiProfiles = await getProfiles()
-      if (apiProfiles.length === 0) {
-        setProfiles([])
-        setActiveProfileId('')
-      } else {
-        const hydratedProfiles = apiProfiles.map(migrateFinancialProfile)
-        setProfiles(hydratedProfiles)
-        setActiveProfileId((current) => {
-          const selected = hydratedProfiles.find((profile) => profile.id === current) ?? hydratedProfiles[0]
-          if (!selected) return ''
-          setReportingPeriod(latestReportingPeriod(selected, asOfDate.slice(0, 7)))
-          return selected.id
-        })
-      }
-    } catch {
-      setApiStatus('blocked')
-    }
-  }, [asOfDate, setActiveProfileId, setApiStatus, setProfiles, setReportingPeriod])
+  useEffect(() => {
+    if (apiStatus === 'authentication_required' && accessTokenError) accessTokenRef.current?.focus()
+  }, [accessTokenError, apiStatus])
 
-  const currentProfile = profiles.find((row) => row.id === activeProfileId) ?? profiles[0]
   const metrics = useMemo(
     () => (currentProfile ? calculateMetrics(currentProfile, { period: reportingPeriod, asOfDate }) : null),
     [asOfDate, currentProfile, reportingPeriod],
   )
+
+  useEffect(() => {
+    const section = new URL(window.location.href).searchParams.get('section')
+    if (section && !appTabs.includes(section as AppTab)) updateTabLocation('profiles', 'replaceState')
+    const onPopState = () => {
+      const tab = tabFromLocation()
+      if (tab !== 'profiles') {
+        setPendingDeleteProfileId('')
+        setPendingDeleteAllProfiles(false)
+      }
+      setActiveTab(tab)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
 
   function switchTab(tab: AppTab) {
     if (tab !== 'profiles') {
       setPendingDeleteProfileId('')
       setPendingDeleteAllProfiles(false)
     }
+    updateTabLocation(tab, 'pushState')
     setActiveTab(tab)
   }
 
@@ -97,33 +129,28 @@ function App() {
     setIsCreateProfileOpen(false)
   }, [])
 
-  async function handleProfileChange(id: string, targetTab?: AppTab) {
-    const selectedProfile = profiles.find((profile) => profile.id === id)
-    if (!selectedProfile) return
-    setActiveProfileId(selectedProfile.id)
-    setReportingPeriod(latestReportingPeriod(selectedProfile, asOfDate.slice(0, 7)))
+  function handleProfileChange(id: string, targetTab?: AppTab): void {
+    if (!selectProfile(id)) return
     setImportMessage('')
     setProfileMessage('')
     setPendingDeleteProfileId('')
     setPendingDeleteAllProfiles(false)
     if (targetTab) switchTab(targetTab)
   }
-
-  function openDashboardForProfile(id = activeProfileId) {
+  function openDashboardForProfile(id = activeProfileId): void {
     const selectedProfile = profiles.find((profile) => profile.id === id) ?? currentProfile
     if (!selectedProfile) {
-      setActiveTab('profiles')
+      switchTab('profiles')
       return
     }
-    setActiveProfileId(selectedProfile.id)
-    setReportingPeriod(latestReportingPeriod(selectedProfile, asOfDate.slice(0, 7)))
+
+    activateProfile(selectedProfile)
     setImportMessage('')
     setProfileMessage('')
     setPendingDeleteProfileId('')
     setPendingDeleteAllProfiles(false)
-    setActiveTab('dashboard')
+    switchTab('dashboard')
   }
-
   async function handleReset() {
     if (!currentProfile) return
     const original = exampleProfiles.find((row) => row.id === currentProfile.id)
@@ -131,23 +158,29 @@ function App() {
       setProfileMessage('Este perfil no es de ejemplo. Usa Eliminar si quieres retirarlo o captura nuevos datos encima.')
       return
     }
-    await persistProfile(original)
-    setProfileMessage('Datos de ejemplo restaurados para este espacio.')
-    setImportMessage('Perfil restaurado con datos de ejemplo.')
+    try {
+      await persistProfile(original)
+      setProfileMessage('Datos de ejemplo restaurados para este espacio.')
+      setImportMessage('Perfil restaurado con datos de ejemplo.')
+    } catch (error) {
+      setProfileMessage(error instanceof Error ? error.message : 'No se pudo restaurar el perfil.')
+    }
   }
 
-  async function handleRestoreExamples() {
+  async function handleRestoreExamples(): Promise<void> {
     const firstExample = exampleProfiles[0]
     if (!firstExample) return
-    await Promise.all(exampleProfiles.map((profile) => persistProfile(profile)))
-    setProfiles(exampleProfiles)
-    setActiveProfileId(firstExample.id)
-    setReportingPeriod(latestReportingPeriod(firstExample, asOfDate.slice(0, 7)))
-    setPendingDeleteAllProfiles(false)
-    setPendingDeleteProfileId('')
-    setProfileMessage('Perfiles de ejemplo restaurados.')
-  }
 
+    try {
+      await Promise.all(exampleProfiles.map((profile) => persistProfile(profile)))
+      replaceProfiles(exampleProfiles)
+      setPendingDeleteAllProfiles(false)
+      setPendingDeleteProfileId('')
+      setProfileMessage('Perfiles de ejemplo restaurados.')
+    } catch (error) {
+      setProfileMessage(error instanceof Error ? error.message : 'No se pudieron restaurar los perfiles.')
+    }
+  }
   async function handleCreateManualProfile() {
     const firstGoalError = includeStarterGoal ? validateGoalForm(starterGoal, asOfDate) : ''
     if (firstGoalError) {
@@ -184,7 +217,7 @@ function App() {
       ].map((category) => ({ category, monthlyLimit: 0 })),
       monthlySnapshots: [
         {
-          month: new Date().toISOString().slice(0, 7),
+          month: civilMonth(),
           income: 0,
           expenses: 0,
           debtPayments: 0,
@@ -194,8 +227,13 @@ function App() {
       ],
       importedDocuments: [],
     }
-    await persistProfile(profile)
-    setActiveProfileId(id)
+    try {
+      await persistProfile(profile)
+    } catch (error) {
+      setProfileMessage(error instanceof Error ? error.message : 'No se pudo crear el perfil.')
+      return
+    }
+    activateProfile(profile)
     switchTab(firstGoal ? 'planning' : 'capture')
     setPendingDeleteProfileId('')
     setIsCreateProfileOpen(false)
@@ -229,7 +267,7 @@ function App() {
       ),
       monthlySnapshots: [
         {
-          month: new Date().toISOString().slice(0, 7),
+          month: civilMonth(),
           income: 0,
           expenses: 0,
           debtPayments: 0,
@@ -254,10 +292,9 @@ function App() {
       const result = await importFinancialFiles(baseProfile, files)
       const importedProfile = mode === 'new' ? enrichImportedProfileName(result.profile, result.documents) : result.profile
       const recalculatedProfile = recalculateLatestSnapshot(importedProfile, asOfDate)
-      await persistProfile(recalculatedProfile)
-      setActiveProfileId(importedProfile.id)
-      setReportingPeriod(latestReportingPeriod(recalculatedProfile, asOfDate.slice(0, 7)))
-      switchTab(mode === 'new' ? 'dashboard' : 'imports')
+      await persistProfile(recalculatedProfile, { operation: 'import_batch' })
+      activateProfile(recalculatedProfile)
+      switchTab('imports')
       setPendingDeleteProfileId('')
       if (mode === 'new') setIsCreateProfileOpen(false)
       setProfileMessage(safeUserMessage(result.summary))
@@ -271,16 +308,40 @@ function App() {
   }
 
   async function updateProfile(profile: FinancialProfile) {
-    const recalculatedProfile = recalculateLatestSnapshot(profile, asOfDate)
-    await persistProfile(recalculatedProfile)
-    setReportingPeriod(latestReportingPeriod(recalculatedProfile, asOfDate.slice(0, 7)))
+    try {
+      const recalculatedProfile = recalculateLatestSnapshot(profile, asOfDate)
+      await persistProfile(recalculatedProfile)
+      updateReportingPeriod(recalculatedProfile)
+      setProfileMessage('')
+      setImportMessage('')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo guardar el perfil.'
+      setProfileMessage(message)
+      setImportMessage(message)
+      throw error
+    }
   }
 
-  async function handleApplyReviewedDocumentMovements(documentId: string) {
+  async function handleCloseReportingPeriod(balanceAsOf: string) {
     if (!currentProfile) return
     try {
-      const { applyReviewedStatementMovements } = await import('./lib/importers')
-      const result = applyReviewedStatementMovements(currentProfile, documentId)
+      const recalculated = recalculateLatestSnapshot(currentProfile, asOfDate)
+      const closed = closeMonthlySnapshot(recalculated, reportingPeriod, balanceAsOf, new Date().toISOString(), asOfDate)
+      await persistProfile(closed)
+      setProfileMessage(`Periodo ${reportingPeriod} conciliado con saldos al ${balanceAsOf}.`)
+      setImportMessage('')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo cerrar el periodo.'
+      setProfileMessage(message)
+      throw error
+    }
+  }
+
+  async function handleApplyReviewedDocumentMovements(documentId: string, fields: ReviewedDocumentFields = {}) {
+    if (!currentProfile) return
+    try {
+      const { applyReviewedDocument } = await import('./lib/importers')
+      const result = applyReviewedDocument(currentProfile, documentId, fields)
       await persistProfile(recalculateLatestSnapshot(result.profile, asOfDate))
       const appliedRows = Number(result.document.extracted?.reviewedMovementRowsApplied ?? 0)
       const message = result.document.kind === 'payroll_cfdi'
@@ -312,70 +373,62 @@ function App() {
     }
   }
 
-  async function persistProfile(profile: FinancialProfile) {
-    if (apiStatus !== 'sqlite') throw new Error('SQLite local no esta disponible. Reintenta cuando la API este activa.')
-    await saveProfile(profile)
-    setProfiles((current) => {
-      const exists = current.some((row) => row.id === profile.id)
-      return exists ? current.map((row) => (row.id === profile.id ? profile : row)) : [profile, ...current]
-    })
+  async function handleUndoLatestImport() {
+    if (!currentProfile) return
+    try {
+      const deleted = await undoLatestImportForProfile(currentProfile.id)
+      const message = deleted
+        ? 'Ultima importacion deshecha. El perfil creado por ese lote fue eliminado.'
+        : 'Ultima importacion deshecha.'
+      setImportMessage(deleted ? '' : message)
+      setProfileMessage(message)
+      switchTab(deleted ? 'profiles' : 'imports')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo deshacer la importacion.'
+      setImportMessage(message)
+      setProfileMessage(message)
+    }
   }
 
-  async function handleDeleteProfile(id: string) {
+  async function handleDeleteProfile(id: string): Promise<void> {
     const targetProfile = profiles.find((profile) => profile.id === id)
     if (!targetProfile) return
+
+    const targetName = profileDisplayName(targetProfile, profiles)
     setPendingDeleteAllProfiles(false)
     if (pendingDeleteProfileId !== id) {
       setPendingDeleteProfileId(id)
-      setProfileMessage(`Confirma para eliminar ${profileDisplayName(targetProfile, profiles)}. Esta accion no se puede deshacer.`)
+      setProfileMessage('Confirma para eliminar ' + targetName + '. Esta accion no se puede deshacer.')
       return
     }
 
     try {
-      if (apiStatus !== 'sqlite') throw new Error('SQLite local no esta disponible. Reintenta cuando la API este activa.')
-      await deleteProfile(id)
-
-      const nextProfiles = profiles.filter((profile) => profile.id !== id)
-      if (nextProfiles.length === 0) {
-        setActiveProfileId('')
-      } else if (id === activeProfileId) {
-        const nextProfile = nextProfiles[0]
-        if (nextProfile) {
-          setActiveProfileId(nextProfile.id)
-          setReportingPeriod(latestReportingPeriod(nextProfile, asOfDate.slice(0, 7)))
-        }
-      }
-      setProfiles(nextProfiles)
+      const nextProfiles = await deleteStoredProfile(id)
       setPendingDeleteProfileId('')
-      setActiveTab('profiles')
+      switchTab('profiles')
       setProfileMessage(
         nextProfiles.length === 0
-          ? `${profileDisplayName(targetProfile, profiles)} fue eliminado. Crea un perfil nuevo para empezar con datos reales.`
-          : `${profileDisplayName(targetProfile, profiles)} fue eliminado.`,
+          ? targetName + ' fue eliminado. Crea un perfil nuevo para empezar con datos reales.'
+          : targetName + ' fue eliminado.',
       )
     } catch (error) {
       setPendingDeleteProfileId('')
       setProfileMessage(error instanceof Error ? error.message : 'No se pudo eliminar el perfil.')
     }
   }
-
-  async function handleDeleteAllProfiles() {
+  async function handleDeleteAllProfiles(): Promise<void> {
     if (profiles.length === 0) return
+
     if (!pendingDeleteAllProfiles) {
       setPendingDeleteAllProfiles(true)
       setPendingDeleteProfileId('')
-      setProfileMessage(
-        `Confirma para eliminar ${profiles.length} perfil(es). La app quedara lista para crear un perfil nuevo o restaurar ejemplos.`,
-      )
+      setProfileMessage('Confirma para eliminar ' + profiles.length + ' perfiles. Esta accion no se puede deshacer.')
       return
     }
 
     try {
-      if (apiStatus !== 'sqlite') throw new Error('SQLite local no esta disponible. Reintenta cuando la API este activa.')
-      await deleteAllProfiles()
-      setProfiles([])
-      setActiveProfileId('')
-      setActiveTab('profiles')
+      await deleteAllStoredProfiles()
+    switchTab('profiles')
       setPendingDeleteAllProfiles(false)
       setPendingDeleteProfileId('')
       setProfileMessage('Todos los perfiles fueron eliminados. Crea un perfil nuevo para empezar con datos reales.')
@@ -385,12 +438,6 @@ function App() {
       setProfileMessage(error instanceof Error ? error.message : 'No se pudieron eliminar todos los perfiles.')
     }
   }
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => void loadProfiles(), 0)
-    return () => window.clearTimeout(timer)
-  }, [loadProfiles])
-
   const profileCreation: ProfileCreationState = {
     isOpen: isCreateProfileOpen,
     mode: createProfileMode,
@@ -418,6 +465,35 @@ function App() {
 
   if (apiStatus === 'checking') {
     return <main className="loading">Cargando datos...</main>
+  }
+
+  if (apiStatus === 'authentication_required') {
+    return (
+      <main className="loading blocked-storage">
+          <form className="panel" onSubmit={(event) => {
+            event.preventDefault()
+            setAccessTokenError(false)
+            setIsAuthenticating(true)
+            setApiAccessToken(accessToken)
+            setAccessToken('')
+            void loadProfiles()
+              .then((loaded) => setAccessTokenError(!loaded))
+              .finally(() => setIsAuthenticating(false))
+        }}>
+          <p className="eyebrow">Datos protegidos</p>
+          <h1>Conecta con tus finanzas</h1>
+          <p>Introduce la clave que aparece en la terminal al iniciar la API. Se conserva solo en esta pestaña.</p>
+          <label>Clave de acceso
+            <input ref={accessTokenRef} autoComplete="off" type="password" required value={accessToken} aria-invalid={accessTokenError || undefined} aria-describedby={accessTokenError ? 'access-token-error' : undefined} onChange={(event) => {
+              setAccessToken(event.target.value)
+              setAccessTokenError(false)
+            }} />
+          </label>
+          {accessTokenError && <p id="access-token-error" className="form-error" role="alert">La clave es incorrecta. Revisa la terminal de la API e intenta de nuevo.</p>}
+          <button type="submit" className="action-button" disabled={isAuthenticating}>{isAuthenticating ? 'Comprobando...' : 'Conectar'}</button>
+        </form>
+      </main>
+    )
   }
 
   if (apiStatus === 'blocked') {
@@ -452,37 +528,46 @@ function App() {
 
   return (
     <MainAppShell
-      activeTab={activeTab}
-      canResetProfile={exampleProfiles.some((profile) => profile.id === currentProfile.id)}
-      profiles={profiles}
-      currentProfile={currentProfile}
-      metrics={metrics}
-      asOfDate={asOfDate}
-      reportingPeriod={reportingPeriod}
-      creation={profileCreation}
-      pendingDeleteProfileId={pendingDeleteProfileId}
-      pendingDeleteAllProfiles={pendingDeleteAllProfiles}
-      profileMessage={profileMessage}
-      importMessage={importMessage}
-      isImporting={isImporting}
-      importQueue={importQueue}
-      onSwitchTab={switchTab}
-      onProfileChange={(id, targetTab) => void handleProfileChange(id, targetTab)}
-      onOpenCreateProfile={openCreateProfile}
-      onOpenDashboardForProfile={openDashboardForProfile}
-      onRestoreExamples={() => void handleRestoreExamples()}
-      onResetProfile={() => void handleReset()}
-      onDeleteProfile={(id) => void handleDeleteProfile(id)}
-      onDeleteAllProfiles={() => void handleDeleteAllProfiles()}
-      onUpdateProfile={(next) => void updateProfile(next)}
-      onFiles={(files, mode) => void handleFiles(files, mode)}
-      onReanalyzePersistedDocuments={() => void handleReanalyzePersistedDocuments()}
-      onApplyReviewedDocumentMovements={(documentId) => void handleApplyReviewedDocumentMovements(documentId)}
-      onCreateGoalFromPlanning={() => {
-        switchTab('capture')
-        setProfileMessage('Crea una meta y después regresa a Planeación para revisar su factibilidad.')
+      navigation={{
+        activeTab,
+        asOfDate,
+        reportingPeriod,
+        onSwitchTab: switchTab,
+        onReportingPeriodChange: setReportingPeriod,
       }}
-      onReportingPeriodChange={setReportingPeriod}
+      profile={{
+        canResetProfile: exampleProfiles.some((profile) => profile.id === currentProfile.id),
+        profiles,
+        currentProfile,
+        creation: profileCreation,
+        pendingDeleteProfileId,
+        pendingDeleteAllProfiles,
+        profileMessage,
+        onProfileChange: (id, targetTab) => handleProfileChange(id, targetTab),
+        onOpenCreateProfile: openCreateProfile,
+        onOpenDashboardForProfile: openDashboardForProfile,
+        onRestoreExamples: () => void handleRestoreExamples(),
+        onResetProfile: () => void handleReset(),
+        onDeleteProfile: (id) => void handleDeleteProfile(id),
+            onDeleteAllProfiles: () => void handleDeleteAllProfiles(),
+            onUpdateProfile: updateProfile,
+            onCloseReportingPeriod: handleCloseReportingPeriod,
+        onCreateGoalFromPlanning: () => {
+          switchTab('capture')
+          setProfileMessage('Crea una meta y después regresa Planeación para revisar su factibilidad.')
+        },
+      }}
+      documents={{
+        canUndoLatestImport: undoableImportProfileIds.has(currentProfile.id),
+        importMessage,
+        isImporting,
+        importQueue,
+        onFiles: (files, mode) => void handleFiles(files, mode),
+        onReanalyzePersistedDocuments: () => void handleReanalyzePersistedDocuments(),
+        onApplyReviewedDocumentMovements: (documentId, fields) => void handleApplyReviewedDocumentMovements(documentId, fields),
+        onUndoLatestImport: handleUndoLatestImport,
+      }}
+      metrics={metrics}
     />
   )
 }
