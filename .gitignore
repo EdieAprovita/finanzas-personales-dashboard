@@ -21,8 +21,13 @@ data
 
 # Test artifacts
 .playwright
+.playwright-cli/
 playwright-report
 test-results
+
+# Generated artifacts
+output/
+tmp/
 
 # Local analysis artifacts
 .gitnexus/
