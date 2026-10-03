@@ -1,5 +1,8 @@
 import { chromium, expect } from '@playwright/test'
 
+const accessToken = process.env.FINANZAS_API_TOKEN?.trim()
+if (!accessToken) throw new Error('Configura FINANZAS_API_TOKEN con la clave de acceso de la API.')
+
 const url = process.env.FINANZAS_LAN_URL ?? 'http://192.168.1.90:5193/'
 const screenshotPath = process.env.FINANZAS_LAN_SCREENSHOT ?? 'reports/finanzas-lan-desktop-empty-after-delete.png'
 
@@ -12,9 +15,12 @@ page.on('console', (message) => consoleMessages.push(`${message.type()}: ${messa
 page.on('pageerror', (error) => pageErrors.push(error.message))
 
 try {
+  await page.addInitScript((token) => {
+    window.sessionStorage.setItem('finanzas-api-access-token', token)
+  }, accessToken)
   await page.goto(url)
 
-  const emptyState = page.getByRole('heading', { name: 'Sin perfiles guardados' })
+  const emptyState = page.getByRole('heading', { name: 'Empieza con tu información financiera' })
   try {
     await expect(emptyState).toBeVisible({ timeout: 5000 })
     const restore = page.getByRole('button', { name: /Restaurar ejemplos/i })
@@ -33,14 +39,14 @@ try {
   await page.getByRole('button', { name: 'Borrar todos los perfiles' }).click()
   await page.getByRole('button', { name: 'Confirmar borrar todos los perfiles' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Sin perfiles guardados' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Empieza con tu información financiera' })).toBeVisible()
   await expect(page.locator('[aria-label="Perfiles financieros"]')).toHaveCount(0)
   await expect(page.locator('[aria-label="Perfil activo"]')).toHaveCount(0)
   await expect(page.locator('.profile-card')).toHaveCount(0)
   await expect(page.getByText('Origen no permitido para la API local.')).toHaveCount(0)
 
   const profilesUrl = new URL('/api/profiles', url).toString()
-  const response = await page.request.get(profilesUrl)
+  const response = await page.request.get(profilesUrl, { headers: { authorization: `Bearer ${accessToken}` } })
   if (!response.ok()) throw new Error(`API profiles respondio ${response.status()}`)
   const body = await response.json()
   if (body.profiles.length !== 0) throw new Error(`SQLite conserva ${body.profiles.length} perfil(es)`)

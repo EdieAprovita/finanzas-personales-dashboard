@@ -1,0 +1,2 @@
+# Herramienta de análisis local; no forma parte del runtime de la aplicación.
+graphifyy==0.9.56
